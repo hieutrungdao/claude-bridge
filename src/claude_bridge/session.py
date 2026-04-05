@@ -9,6 +9,37 @@ from datetime import datetime
 from pathlib import Path
 
 
+def get_instance_prefix() -> str:
+    """Derive a short instance prefix from CLAUDE_BRIDGE_HOME.
+
+    Returns empty string for the default home (~/.claude-bridge), ensuring
+    backward compatibility for single-instance setups.  For non-default
+    homes, returns a sanitized basename so that agent .md files placed in
+    the shared ~/.claude/agents/ directory don't collide across instances.
+
+    Examples:
+        ~/.claude-bridge          → ""
+        ~/.claude-bridge-prod     → "prod"
+        ~/.claude-bridge-staging  → "staging"
+        /tmp/test-bridge          → "test-bridge"
+    """
+    from . import get_bridge_home
+    home = get_bridge_home()
+    default = Path.home() / ".claude-bridge"
+    if home == default:
+        return ""
+
+    name = home.name  # basename of the path
+    # Strip common prefixes to get a short, meaningful identifier
+    for strip in (".claude-bridge-", "claude-bridge-", ".bridge-", "bridge-"):
+        if name.startswith(strip):
+            name = name[len(strip):]
+            break
+    # Sanitize: keep only alphanumeric and hyphens
+    name = re.sub(r"[^a-zA-Z0-9-]", "-", name).strip("-")
+    return (name or "custom")[:20]
+
+
 def derive_session_id(agent_name: str, project_dir: str) -> str:
     """Derive session ID from agent name and project basename.
 
@@ -22,14 +53,24 @@ def derive_session_id(agent_name: str, project_dir: str) -> str:
 def derive_agent_file_name(session_id: str) -> str:
     """Derive the native Claude Code agent .md filename (slug only, no path/extension).
 
-    Example: backend--my-api → bridge--backend--my-api
+    Includes an instance prefix when CLAUDE_BRIDGE_HOME is non-default so
+    that multiple bridge instances sharing the same ~/.claude/agents/ directory
+    don't overwrite each other's agent files.
 
     Naming convention:
     - agent_file_name / agent_slug: just the name, e.g. "bridge--backend--my-api"
-    - agent_file_path / agent_md_path: full path with .md, e.g. "~/.claude/agents/bridge--backend--my-api.md"
+    - agent_file_path / agent_md_path: full path with .md
     - db.agents.agent_file column: stores the full path (agent_md_path)
     Use get_agent_file_path(session_id) for the full path.
+
+    Examples (default home):
+        backend--my-api → "bridge--backend--my-api"
+    Examples (prod home ~/.claude-bridge-prod):
+        backend--my-api → "bridge--prod--backend--my-api"
     """
+    prefix = get_instance_prefix()
+    if prefix:
+        return f"bridge--{prefix}--{session_id}"
     return f"bridge--{session_id}"
 
 
@@ -66,9 +107,9 @@ def get_tasks_dir(session_id: str) -> str:
 
 
 def get_agent_file_path(session_id: str) -> str:
-    """Get the full path to the agent .md file."""
+    """Get the full path to the agent .md file in ~/.claude/agents/."""
     name = derive_agent_file_name(session_id)
-    return os.path.expanduser(f"~/.claude/agents/{name}.md")
+    return os.path.join(os.path.expanduser("~/.claude/agents"), f"{name}.md")
 
 
 def create_workspace(session_id: str, agent_name: str, project_dir: str, purpose: str):

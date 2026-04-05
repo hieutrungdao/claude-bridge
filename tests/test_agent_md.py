@@ -2,7 +2,7 @@
 
 import os
 import sys
-from claude_bridge.agent_md import generate_agent_md
+from claude_bridge.agent_md import generate_agent_md, write_agent_md, delete_agent_md
 
 
 class TestGenerateAgentMd:
@@ -80,3 +80,65 @@ class TestGenerateAgentMd:
         # Default home contains ".claude-bridge"
         assert "CLAUDE_BRIDGE_HOME=" in hook_cmd
         assert ".claude-bridge" in hook_cmd
+
+
+class TestInstancePrefixInAgentMd:
+    def test_generate_uses_instance_prefix(self, tmp_path, monkeypatch):
+        """generate_agent_md embeds instance-prefixed name when home is non-default."""
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        assert "name: bridge--prod--backend--api" in content
+
+    def test_generate_no_prefix_for_default_home(self, monkeypatch):
+        """generate_agent_md uses plain bridge-- prefix for default home."""
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
+        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        assert "name: bridge--backend--api" in content
+        assert "bridge--prod" not in content
+
+    def test_write_uses_instance_prefix_in_filename(self, tmp_path, monkeypatch):
+        """write_agent_md writes file with instance-prefixed name."""
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        path = write_agent_md("backend--api", content)
+        assert path.endswith("bridge--prod--backend--api.md")
+        assert os.path.isfile(path)
+
+    def test_delete_removes_instance_prefixed_file(self, tmp_path, monkeypatch):
+        """delete_agent_md removes the correct instance-prefixed file."""
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        monkeypatch.setenv("HOME", str(tmp_path))
+        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        write_agent_md("backend--api", content)
+        assert delete_agent_md("backend--api") is True
+        # File should be gone
+        agents_dir = os.path.join(str(tmp_path), ".claude", "agents")
+        assert not os.path.isfile(os.path.join(agents_dir, "bridge--prod--backend--api.md"))
+
+    def test_two_instances_different_files(self, tmp_path, monkeypatch):
+        """Two instances create non-conflicting agent files."""
+        prod = tmp_path / ".claude-bridge-prod"
+        prod.mkdir()
+        staging = tmp_path / ".claude-bridge-staging"
+        staging.mkdir()
+
+        monkeypatch.setenv("HOME", str(tmp_path))
+
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(prod))
+        content_prod = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        path_prod = write_agent_md("backend--api", content_prod)
+
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(staging))
+        content_staging = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        path_staging = write_agent_md("backend--api", content_staging)
+
+        assert path_prod != path_staging
+        assert os.path.isfile(path_prod)
+        assert os.path.isfile(path_staging)

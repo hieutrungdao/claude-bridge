@@ -2,10 +2,12 @@
 
 import json
 import os
+import re
 
 from claude_bridge.session import (
     derive_session_id,
     derive_agent_file_name,
+    get_instance_prefix,
     validate_agent_name,
     validate_project_dir,
     get_workspace_dir,
@@ -27,9 +29,66 @@ class TestDeriveSessionId:
         assert derive_session_id("backend", "/projects/my-api/") == "backend--my-api"
 
 
+class TestGetInstancePrefix:
+    def test_default_home_returns_empty(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
+        assert get_instance_prefix() == ""
+
+    def test_custom_home_with_bridge_prefix(self, tmp_path, monkeypatch):
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        assert get_instance_prefix() == "prod"
+
+    def test_custom_home_staging(self, tmp_path, monkeypatch):
+        custom = tmp_path / ".claude-bridge-staging"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        assert get_instance_prefix() == "staging"
+
+    def test_custom_home_no_bridge_prefix(self, tmp_path, monkeypatch):
+        custom = tmp_path / "my-instance"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        assert get_instance_prefix() == "my-instance"
+
+    def test_custom_home_special_chars_sanitized(self, tmp_path, monkeypatch):
+        custom = tmp_path / "my_instance.2"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        prefix = get_instance_prefix()
+        assert re.match(r"^[a-zA-Z0-9-]+$", prefix)
+
+    def test_prefix_max_20_chars(self, tmp_path, monkeypatch):
+        custom = tmp_path / ("a" * 30)
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        assert len(get_instance_prefix()) <= 20
+
+
 class TestDeriveAgentFileName:
-    def test_basic(self):
+    def test_basic_default_home(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
         assert derive_agent_file_name("backend--my-api") == "bridge--backend--my-api"
+
+    def test_with_instance_prefix(self, tmp_path, monkeypatch):
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        assert derive_agent_file_name("backend--my-api") == "bridge--prod--backend--my-api"
+
+    def test_different_instances_no_conflict(self, tmp_path, monkeypatch):
+        prod = tmp_path / ".claude-bridge-prod"
+        prod.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(prod))
+        name_prod = derive_agent_file_name("backend--api")
+
+        staging = tmp_path / ".claude-bridge-staging"
+        staging.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(staging))
+        name_staging = derive_agent_file_name("backend--api")
+
+        assert name_prod != name_staging
 
 
 class TestValidateAgentName:
@@ -70,10 +129,18 @@ class TestPathHelpers:
         path = get_tasks_dir("backend--my-api")
         assert path.endswith("workspaces/backend--my-api/tasks")
 
-    def test_get_agent_file_path(self):
+    def test_get_agent_file_path(self, monkeypatch):
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
         path = get_agent_file_path("backend--my-api")
         assert "agents/bridge--backend--my-api.md" in path
         assert path.startswith("/")
+
+    def test_get_agent_file_path_with_instance_prefix(self, tmp_path, monkeypatch):
+        custom = tmp_path / ".claude-bridge-prod"
+        custom.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+        path = get_agent_file_path("backend--my-api")
+        assert "agents/bridge--prod--backend--my-api.md" in path
 
 
 class TestCreateWorkspace:

@@ -11,7 +11,7 @@ from datetime import datetime
 
 from .db import BridgeDB
 from .message_db import MessageDB
-from .session import derive_session_id
+from .session import derive_session_id, derive_agent_file_name
 from .agent_md import generate_agent_md, write_agent_md, install_stop_hook
 from .claude_md_init import init_claude_md
 from .dispatcher import spawn_task, get_result_file, kill_process
@@ -19,7 +19,7 @@ from .session import create_workspace
 
 
 def _agent_file_name(session_id: str) -> str:
-    return f"bridge--{session_id}"
+    return derive_agent_file_name(session_id)
 
 
 def tool_agents(db: BridgeDB) -> str:

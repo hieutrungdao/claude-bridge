@@ -6,6 +6,8 @@ import os
 import sys
 from pathlib import Path
 
+from .session import derive_agent_file_name
+
 AGENT_TEMPLATE = """---
 name: {agent_file_name}
 description: "{purpose}"
@@ -47,7 +49,7 @@ def generate_agent_md(
     model: str = "sonnet",
 ) -> str:
     """Generate agent .md file content in native Claude Code format."""
-    agent_file_name = f"bridge--{session_id}"
+    agent_file_name = derive_agent_file_name(session_id)
     src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     python_path = sys.executable
 
@@ -65,7 +67,7 @@ def generate_agent_md(
 
 def write_agent_md(session_id: str, content: str) -> str:
     """Write agent .md file to ~/.claude/agents/. Returns the file path."""
-    agent_file_name = f"bridge--{session_id}"
+    agent_file_name = derive_agent_file_name(session_id)
     agents_dir = os.path.expanduser("~/.claude/agents")
     os.makedirs(agents_dir, exist_ok=True)
 
@@ -134,8 +136,8 @@ def install_stop_hook(project_dir: str, session_id: str) -> str:
 
 def delete_agent_md(session_id: str) -> bool:
     """Delete agent .md file. Returns True if file existed."""
-    agent_file_name = f"bridge--{session_id}"
-    file_path = os.path.expanduser(f"~/.claude/agents/{agent_file_name}.md")
+    agent_file_name = derive_agent_file_name(session_id)
+    file_path = os.path.join(os.path.expanduser("~/.claude/agents"), f"{agent_file_name}.md")
     if os.path.isfile(file_path):
         os.remove(file_path)
         return True
