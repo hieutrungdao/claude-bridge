@@ -92,7 +92,7 @@ class TelegramPoller:
 
     def __init__(self, token: str, msg_db: MessageDB):
         self.token = token
-        self._main_msg_db = msg_db  # kept for reference, not used in thread
+        self.msg_db = msg_db
         self._running = False
         self._thread: threading.Thread | None = None
 
@@ -110,7 +110,7 @@ class TelegramPoller:
 
     def _run(self):
         """Main polling loop."""
-        self.msg_db = MessageDB()  # create connection in this thread
+        self.msg_db = MessageDB()  # fresh connection owned by this thread
         try:
             while self._running:
                 try:
