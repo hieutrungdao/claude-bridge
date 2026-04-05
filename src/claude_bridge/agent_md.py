@@ -102,11 +102,16 @@ def install_stop_hook(project_dir: str, session_id: str) -> str:
                 settings = {}
 
     # Build hook command — use bridge-cli if installed, fall back to PYTHONPATH
+    # Always prepend CLAUDE_BRIDGE_HOME so on_complete reads the correct DB
+    # when multiple instances run with different homes.
+    from . import get_bridge_home
+    bridge_home = str(get_bridge_home())
+
     bridge_cli = shutil.which("bridge-cli")
     if bridge_cli:
-        hook_command = f"{bridge_cli} on-complete --session-id {session_id}"
+        hook_command = f"CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} on-complete --session-id {session_id}"
     else:
-        hook_command = f"PYTHONPATH={src_path} {python_path} -m claude_bridge.on_complete --session-id {session_id}"
+        hook_command = f"CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.on_complete --session-id {session_id}"
 
     # Set Stop hook
     settings["hooks"] = settings.get("hooks", {})

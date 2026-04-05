@@ -51,3 +51,32 @@ class TestGenerateAgentMd:
         # When bridge-cli is installed it uses bridge-cli path; otherwise sys.executable
         # Either way the raw "python3" literal must NOT appear
         assert "python3" not in hook_cmd or sys.executable in hook_cmd
+
+    def test_stop_hook_contains_bridge_home(self, tmp_path, monkeypatch):
+        """install_stop_hook must include CLAUDE_BRIDGE_HOME in hook command."""
+        import json
+        from claude_bridge.agent_md import install_stop_hook
+        custom_home = str(tmp_path / "custom-bridge-home")
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", custom_home)
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+        path = install_stop_hook(project_dir, "backend--api")
+        with open(path) as f:
+            settings = json.load(f)
+        hook_cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        assert f"CLAUDE_BRIDGE_HOME={custom_home}" in hook_cmd
+
+    def test_stop_hook_default_bridge_home(self, tmp_path, monkeypatch):
+        """install_stop_hook is backward-compatible when CLAUDE_BRIDGE_HOME is not set."""
+        import json
+        from claude_bridge.agent_md import install_stop_hook
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
+        project_dir = str(tmp_path / "project")
+        os.makedirs(project_dir)
+        path = install_stop_hook(project_dir, "backend--api")
+        with open(path) as f:
+            settings = json.load(f)
+        hook_cmd = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+        # Default home contains ".claude-bridge"
+        assert "CLAUDE_BRIDGE_HOME=" in hook_cmd
+        assert ".claude-bridge" in hook_cmd
