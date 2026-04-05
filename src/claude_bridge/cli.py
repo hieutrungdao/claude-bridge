@@ -860,8 +860,10 @@ def _get_bot_token() -> str:
 def _deploy_channel_server(bridge_home: str) -> str | None:
     """Copy bundled channel server.js to bridge_home/channel/dist/.
 
-    Returns the deployed path on success, or None if the bundled file is not found.
+    Returns the deployed path on success, or None if no source is found.
     Idempotent: skips copy if the file is already deployed.
+    Fallback: if bundled package server is missing, copies from default
+    ~/.claude-bridge/channel/dist/server.js (useful for second instances).
     """
     import shutil as _shutil
     from . import get_channel_server_path
@@ -873,9 +875,18 @@ def _deploy_channel_server(bridge_home: str) -> str | None:
     if os.path.isfile(deployed_path):
         return deployed_path  # already deployed
 
+    # Pick source: bundled package first, then default instance location
+    source: str | None = None
     if os.path.isfile(bundled):
+        source = bundled
+    else:
+        default_deployed = os.path.join(os.path.expanduser("~"), ".claude-bridge", "channel", "dist", "server.js")
+        if os.path.isfile(default_deployed) and default_deployed != deployed_path:
+            source = default_deployed
+
+    if source:
         os.makedirs(deployed_dir, exist_ok=True)
-        _shutil.copy2(bundled, deployed_path)
+        _shutil.copy2(source, deployed_path)
         return deployed_path
 
     return None
@@ -895,13 +906,14 @@ def generate_mcp_json(mode: str = "channel") -> str:
     if os.path.isfile(deployed):
         channel_path = deployed
     else:
-        # Fall back to bundled in package or source
+        # Fall back to bundled in package; otherwise keep the intended deployed path
+        # (user must run setup-bot to deploy it — never use a hardcoded dev path)
         from . import get_channel_server_path
         bundled = get_channel_server_path()
         if os.path.isfile(bundled):
             channel_path = bundled
         else:
-            channel_path = os.path.join(os.path.dirname(src_path), "channel", "server.ts")
+            channel_path = deployed
 
     if mode == "channel":
         bun_path = shutil.which("bun") or "bun"

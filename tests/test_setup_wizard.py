@@ -200,11 +200,13 @@ class TestDeployChannelServer:
         assert result == str(deployed)
 
     def test_returns_none_when_bundled_missing(self, tmp_path):
-        """Bundled server not found → returns None (no crash)."""
+        """Bundled server not found and no default fallback → returns None (no crash)."""
         from claude_bridge.cli import _deploy_channel_server
 
         bridge_home = str(tmp_path / "bridge")
-        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")):
+        # Both bundled and default location are missing
+        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")), \
+             patch("os.path.expanduser", side_effect=lambda p: p.replace("~", str(tmp_path / "home"))):
             result = _deploy_channel_server(bridge_home)
 
         assert result is None
@@ -304,3 +306,83 @@ class TestSetupBotDeploysChannelDist:
         mcp = json.loads(Path(bot_dir, ".mcp.json").read_text())
         db_path = mcp["mcpServers"]["bridge"]["env"]["MESSAGES_DB_PATH"]
         assert db_path == str(bridge_home / "messages.db")
+
+
+class TestDeployChannelServerFallback:
+    """_deploy_channel_server falls back to default ~/.claude-bridge for second instances."""
+
+    def test_copies_from_default_when_bundled_missing(self, tmp_path):
+        """Bundled missing but default location exists → copies from default."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        # Create a server.js in the default location
+        default_dir = tmp_path / "home" / ".claude-bridge" / "channel" / "dist"
+        default_dir.mkdir(parents=True)
+        default_server = default_dir / "server.js"
+        default_server.write_text("// from default instance")
+
+        # Second instance bridge home
+        second_home = str(tmp_path / ".claude-bridge-tam")
+
+        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")), \
+             patch("os.path.expanduser", side_effect=lambda p: p.replace("~", str(tmp_path / "home"))):
+            result = _deploy_channel_server(second_home)
+
+        deployed = tmp_path / ".claude-bridge-tam" / "channel" / "dist" / "server.js"
+        assert deployed.is_file()
+        assert result == str(deployed)
+        assert deployed.read_text() == "// from default instance"
+
+    def test_returns_none_when_both_bundled_and_default_missing(self, tmp_path):
+        """Both bundled and default missing → returns None."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        second_home = str(tmp_path / ".claude-bridge-tam")
+        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")), \
+             patch("os.path.expanduser", side_effect=lambda p: p.replace("~", str(tmp_path / "home"))):
+            result = _deploy_channel_server(second_home)
+
+        assert result is None
+
+    def test_does_not_copy_default_to_itself(self, tmp_path):
+        """When bridge_home IS the default location, no self-copy occurs."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        home_dir = tmp_path / "home"
+        default_dir = home_dir / ".claude-bridge" / "channel" / "dist"
+        default_dir.mkdir(parents=True)
+        default_server = default_dir / "server.js"
+        default_server.write_text("// server")
+
+        default_bridge_home = str(home_dir / ".claude-bridge")
+
+        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")), \
+             patch("os.path.expanduser", side_effect=lambda p: p.replace("~", str(home_dir))):
+            # Deploy to default location — should find existing and return it without error
+            result = _deploy_channel_server(default_bridge_home)
+
+        # Already deployed path returns early (first check)
+        assert result == str(default_dir / "server.js")
+
+
+class TestGenerateMcpJsonFallback:
+    """generate_mcp_json uses CLAUDE_BRIDGE_HOME path even when server not yet built."""
+
+    def test_fallback_uses_bridge_home_not_source_ts(self, tmp_path, monkeypatch):
+        """When neither deployed nor bundled exists, path is CLAUDE_BRIDGE_HOME/channel/dist/server.js."""
+        from claude_bridge.cli import generate_mcp_json
+
+        bridge_home = tmp_path / ".claude-bridge-tam"
+        bridge_home.mkdir()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+
+        with patch("shutil.which", return_value="/usr/bin/bun"), \
+             patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")), \
+             patch("claude_bridge.cli._get_bot_token", return_value="test:TOKEN"):
+            result = generate_mcp_json(mode="channel")
+
+        mcp = json.loads(result)
+        channel_path = mcp["mcpServers"]["bridge"]["args"][1]
+        expected = str(bridge_home / "channel" / "dist" / "server.js")
+        assert channel_path == expected
+        assert "server.ts" not in channel_path
