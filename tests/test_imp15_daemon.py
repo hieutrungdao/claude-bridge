@@ -84,6 +84,97 @@ class TestSystemdInstall:
         content = unit_path.read_text()
         assert custom_home in content
 
+    def test_unit_file_uses_tmux_execstart(self, tmp_path):
+        """systemd unit ExecStart uses tmux new-session (not bridge start --foreground)."""
+        from claude_bridge.daemon import install_systemd
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / f"{SYSTEMD_SERVICE_NAME}.service"
+
+        with patch("claude_bridge.daemon._systemd_unit_path", return_value=unit_path), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            ok, _ = install_systemd(
+                bot_dir=str(tmp_path / "bot"),
+                bridge_home=str(tmp_path / "bridge"),
+                log_path=str(tmp_path / "bridge.log"),
+            )
+
+        assert ok is True
+        content = unit_path.read_text()
+        assert "tmux new-session" in content
+        assert "Type=forking" in content
+        assert "RemainAfterExit=yes" in content
+        assert "bridge start --foreground" not in content
+
+    def test_unit_file_service_name_in_tmux_commands(self, tmp_path):
+        """The service_name appears in ExecStartPre/ExecStart/ExecStop."""
+        from claude_bridge.daemon import install_systemd
+        bridge_home = str(tmp_path / ".claude-bridge-tam")
+        service_name = get_service_name(bridge_home)
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / f"{service_name}.service"
+
+        with patch("claude_bridge.daemon._systemd_unit_path", return_value=unit_path), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            ok, _ = install_systemd(
+                bot_dir=str(tmp_path / "bot"),
+                bridge_home=bridge_home,
+                log_path=str(tmp_path / "bridge.log"),
+            )
+
+        assert ok is True
+        content = unit_path.read_text()
+        assert f"-t {service_name}" in content
+        assert f"-s {service_name}" in content
+
+    def test_unit_file_uses_claude_command(self, tmp_path):
+        """ExecStart invokes claude (not bridge-cli) via tmux."""
+        from claude_bridge.daemon import install_systemd
+        unit_dir = tmp_path / ".config" / "systemd" / "user"
+        unit_dir.mkdir(parents=True)
+        unit_path = unit_dir / f"{SYSTEMD_SERVICE_NAME}.service"
+
+        with patch("claude_bridge.daemon._systemd_unit_path", return_value=unit_path), \
+             patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            ok, _ = install_systemd(
+                bot_dir=str(tmp_path / "bot"),
+                bridge_home=str(tmp_path / "bridge"),
+                log_path=str(tmp_path / "bridge.log"),
+            )
+
+        content = unit_path.read_text()
+        assert "claude --dangerously-load-development-channels server:bridge" in content
+        assert "--dangerously-skip-permissions" in content
+
+    def test_two_instances_have_different_service_names_in_unit(self, tmp_path):
+        """Two instances with different CLAUDE_BRIDGE_HOMEs get different service names."""
+        from claude_bridge.daemon import install_systemd
+        for suffix in ("alice", "bob"):
+            bridge_home = str(tmp_path / f".claude-bridge-{suffix}")
+            svc = get_service_name(bridge_home)
+            unit_dir = tmp_path / ".config" / "systemd" / "user"
+            unit_dir.mkdir(parents=True, exist_ok=True)
+            unit_path = unit_dir / f"{svc}.service"
+
+            with patch("claude_bridge.daemon._systemd_unit_path", return_value=unit_path), \
+                 patch("subprocess.run", return_value=MagicMock(returncode=0)):
+                ok, _ = install_systemd(
+                    bot_dir=str(tmp_path / f"bot-{suffix}"),
+                    bridge_home=bridge_home,
+                    log_path=str(tmp_path / "bridge.log"),
+                )
+            assert ok is True
+
+        alice_unit = (tmp_path / ".config" / "systemd" / "user" / "claude-bridge-alice.service")
+        bob_unit = (tmp_path / ".config" / "systemd" / "user" / "claude-bridge-bob.service")
+        assert alice_unit.exists()
+        assert bob_unit.exists()
+        assert alice_unit.read_text() != bob_unit.read_text()
+
 
 class TestLaunchdInstall:
     def test_creates_plist_file(self, tmp_path):

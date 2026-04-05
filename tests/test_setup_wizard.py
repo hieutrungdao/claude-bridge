@@ -178,3 +178,129 @@ class TestSetupParser:
         assert args.token is None
         assert args.bot_dir is None
         assert args.no_prompt is False
+
+
+class TestDeployChannelServer:
+    """_deploy_channel_server copies bundled server.js to bridge_home/channel/dist/."""
+
+    def test_copies_bundled_when_not_deployed(self, tmp_path):
+        """Bundled server exists → copied to bridge_home/channel/dist/server.js."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        bundled = tmp_path / "bundled" / "server.js"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text("// server")
+
+        bridge_home = str(tmp_path / "bridge")
+        with patch("claude_bridge.get_channel_server_path", return_value=str(bundled)):
+            result = _deploy_channel_server(bridge_home)
+
+        deployed = tmp_path / "bridge" / "channel" / "dist" / "server.js"
+        assert deployed.is_file()
+        assert result == str(deployed)
+
+    def test_returns_none_when_bundled_missing(self, tmp_path):
+        """Bundled server not found → returns None (no crash)."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        bridge_home = str(tmp_path / "bridge")
+        with patch("claude_bridge.get_channel_server_path", return_value=str(tmp_path / "nonexistent.js")):
+            result = _deploy_channel_server(bridge_home)
+
+        assert result is None
+
+    def test_idempotent_when_already_deployed(self, tmp_path):
+        """Already deployed → skips copy, returns deployed path."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        bundled = tmp_path / "bundled" / "server.js"
+        bundled.parent.mkdir(parents=True)
+        bundled.write_text("// new version")
+
+        bridge_home = tmp_path / "bridge"
+        deployed_dir = bridge_home / "channel" / "dist"
+        deployed_dir.mkdir(parents=True)
+        deployed = deployed_dir / "server.js"
+        deployed.write_text("// already deployed")
+
+        with patch("claude_bridge.get_channel_server_path", return_value=str(bundled)):
+            result = _deploy_channel_server(str(bridge_home))
+
+        assert result == str(deployed)
+        # Should NOT have overwritten the existing file
+        assert deployed.read_text() == "// already deployed"
+
+    def test_creates_nested_dirs(self, tmp_path):
+        """Creates bridge_home/channel/dist/ directories if they don't exist."""
+        from claude_bridge.cli import _deploy_channel_server
+
+        bundled = tmp_path / "server.js"
+        bundled.write_text("// server")
+
+        bridge_home = str(tmp_path / "deep" / "bridge")
+        with patch("claude_bridge.get_channel_server_path", return_value=str(bundled)):
+            _deploy_channel_server(bridge_home)
+
+        assert (tmp_path / "deep" / "bridge" / "channel" / "dist" / "server.js").is_file()
+
+
+class TestSetupBotDeploysChannelDist:
+    """setup-bot deploys channel dist to CLAUDE_BRIDGE_HOME/channel/dist/ before writing .mcp.json."""
+
+    def _run_setup_bot(self, db, target, bridge_home):
+        from claude_bridge.cli import cmd_setup_bot
+        import argparse
+        args = argparse.Namespace(path=target)
+        with patch("claude_bridge.cli._get_bot_token", return_value="test:TOKEN"), \
+             patch("claude_bridge.cli.get_bridge_home", return_value=Path(bridge_home)):
+            cmd_setup_bot(db, args)
+
+    def test_mcp_json_uses_bridge_home_channel_path_when_deployed(self, tmp_path, monkeypatch):
+        """When channel is deployed, .mcp.json points to CLAUDE_BRIDGE_HOME/channel/dist/server.js."""
+        bridge_home = tmp_path / ".claude-bridge"
+        bridge_home.mkdir()
+        bot_dir = str(tmp_path / "bot")
+        os.makedirs(bot_dir)
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+
+        # Fake a bundled server so it gets deployed
+        bundled = tmp_path / "bundled_server.js"
+        bundled.write_text("// server")
+
+        db = BridgeDB(str(bridge_home / "bridge.db"))
+        with patch("shutil.which", return_value="/usr/bin/bun"), \
+             patch("claude_bridge.get_channel_server_path", return_value=str(bundled)), \
+             patch("claude_bridge.cli._get_bot_token", return_value="test:TOKEN"):
+            from claude_bridge.cli import cmd_setup_bot
+            import argparse
+            cmd_setup_bot(db, argparse.Namespace(path=bot_dir))
+        db.close()
+
+        mcp = json.loads(Path(bot_dir, ".mcp.json").read_text())
+        channel_path = mcp["mcpServers"]["bridge"]["args"][1]
+        expected = str(bridge_home / "channel" / "dist" / "server.js")
+        assert channel_path == expected
+
+    def test_mcp_json_messages_db_path_uses_bridge_home(self, tmp_path, monkeypatch):
+        """MESSAGES_DB_PATH in .mcp.json points to CLAUDE_BRIDGE_HOME/messages.db."""
+        bridge_home = tmp_path / ".claude-bridge-tam"
+        bridge_home.mkdir()
+        bot_dir = str(tmp_path / "bot")
+        os.makedirs(bot_dir)
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+
+        bundled = tmp_path / "server.js"
+        bundled.write_text("// server")
+
+        db = BridgeDB(str(bridge_home / "bridge.db"))
+        with patch("shutil.which", return_value="/usr/bin/bun"), \
+             patch("claude_bridge.get_channel_server_path", return_value=str(bundled)), \
+             patch("claude_bridge.cli._get_bot_token", return_value="test:TOKEN"):
+            from claude_bridge.cli import cmd_setup_bot
+            import argparse
+            cmd_setup_bot(db, argparse.Namespace(path=bot_dir))
+        db.close()
+
+        mcp = json.loads(Path(bot_dir, ".mcp.json").read_text())
+        db_path = mcp["mcpServers"]["bridge"]["env"]["MESSAGES_DB_PATH"]
+        assert db_path == str(bridge_home / "messages.db")

@@ -102,12 +102,11 @@ Description=Claude Bridge Bot
 After=network.target
 
 [Service]
-Type=simple
-ExecStart={bridge_cmd} start --foreground
-Restart=on-failure
-RestartSec=10
-StandardOutput=append:{log_path}
-StandardError=append:{log_path}
+Type=forking
+RemainAfterExit=yes
+ExecStartPre=/bin/bash -c 'tmux kill-session -t {service_name} 2>/dev/null || true'
+ExecStart=/usr/bin/tmux new-session -d -s {service_name} -c {bot_dir} claude --dangerously-load-development-channels server:bridge --dangerously-skip-permissions
+ExecStop=/usr/bin/tmux kill-session -t {service_name}
 Environment="CLAUDE_BRIDGE_HOME={bridge_home}"
 Environment="PATH={path}"
 WorkingDirectory={bot_dir}
@@ -136,12 +135,11 @@ def install_systemd(bot_dir: str, bridge_home: str, log_path: str) -> tuple[bool
     unit_path = _systemd_unit_path(bridge_home)
     unit_path.parent.mkdir(parents=True, exist_ok=True)
 
-    bridge_cmd = _get_bridge_cmd()
+    service_name = get_service_name(bridge_home)
     # Include current PATH so pipx/local bin directories are accessible in the service
     path_env = os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")
     content = SYSTEMD_UNIT_TEMPLATE.format(
-        bridge_cmd=bridge_cmd,
-        log_path=log_path,
+        service_name=service_name,
         bridge_home=bridge_home,
         bot_dir=bot_dir,
         path=path_env,

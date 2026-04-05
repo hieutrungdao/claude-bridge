@@ -857,6 +857,30 @@ def _get_bot_token() -> str:
     return load_config().get("telegram_bot_token", "")
 
 
+def _deploy_channel_server(bridge_home: str) -> str | None:
+    """Copy bundled channel server.js to bridge_home/channel/dist/.
+
+    Returns the deployed path on success, or None if the bundled file is not found.
+    Idempotent: skips copy if the file is already deployed.
+    """
+    import shutil as _shutil
+    from . import get_channel_server_path
+
+    bundled = get_channel_server_path()
+    deployed_dir = os.path.join(bridge_home, "channel", "dist")
+    deployed_path = os.path.join(deployed_dir, "server.js")
+
+    if os.path.isfile(deployed_path):
+        return deployed_path  # already deployed
+
+    if os.path.isfile(bundled):
+        os.makedirs(deployed_dir, exist_ok=True)
+        _shutil.copy2(bundled, deployed_path)
+        return deployed_path
+
+    return None
+
+
 def generate_mcp_json(mode: str = "channel") -> str:
     """Generate .mcp.json content."""
     import json as _json
@@ -925,6 +949,16 @@ def cmd_setup_bot(db: BridgeDB, args):
     mode = "channel" if has_bun else "mcp"
 
     import json as _json
+
+    # Deploy channel server to CLAUDE_BRIDGE_HOME/channel/dist/ so .mcp.json points to stable path
+    if mode == "channel":
+        from . import get_bridge_home
+        bridge_home_path = str(get_bridge_home())
+        deployed = _deploy_channel_server(bridge_home_path)
+        if deployed:
+            print(f"Channel server → {deployed}")
+        else:
+            print("⚠️  Channel server not found — .mcp.json may use fallback path", file=sys.stderr)
 
     # Write CLAUDE.md
     claude_md_path = os.path.join(target, "CLAUDE.md")
