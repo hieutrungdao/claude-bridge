@@ -40,6 +40,7 @@ export interface OutboundRow {
   retry_count: number;
   max_retries: number;
   sent_at: string | null;
+  task_id: number | null;
 }
 
 // --- Database Setup ---
@@ -363,8 +364,10 @@ export async function processOutbound(
     .get();
   if (!hasTable) return { sent: 0, failed: 0 };
 
+  // Include 'notified' status: bridge_get_notifications already pushed the channel tag
+  // but Telegram delivery is still pending for those rows.
   const pending = db
-    .query("SELECT * FROM outbound_messages WHERE status = 'pending' ORDER BY created_at LIMIT 10")
+    .query("SELECT * FROM outbound_messages WHERE status IN ('pending', 'notified') ORDER BY created_at LIMIT 10")
     .all() as OutboundRow[];
 
   let sent = 0;
@@ -377,15 +380,6 @@ export async function processOutbound(
         "UPDATE outbound_messages SET status = 'sent', sent_at = datetime('now') WHERE id = ?",
         [msg.id]
       );
-      if (msg.source === "notification") {
-        notifier.notification({
-          method: "notifications/claude/channel",
-          params: {
-            content: msg.message_text,
-            meta: { source: "task_completion", chat_id: msg.chat_id },
-          },
-        });
-      }
       sent++;
     } catch {
       const retryCount = msg.retry_count + 1;

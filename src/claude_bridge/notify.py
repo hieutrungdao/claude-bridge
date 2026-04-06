@@ -82,6 +82,12 @@ def format_completion_message(task, agent_name: str) -> str:
 
     cost = f"${task['cost_usd']:.3f}" if task["cost_usd"] else ""
 
+    try:
+        turns = task["num_turns"] or 0
+    except (IndexError, KeyError):
+        turns = 0
+    turns_str = f" | Turns: {turns}" if turns else ""
+
     if status == "done":
         icon = "🏁" if task_type == "team" else "✓"
         lines = [f"{icon} Task #{task_id} ({agent_name}) — done"]
@@ -89,18 +95,18 @@ def format_completion_message(task, agent_name: str) -> str:
             lines[0] += f" in {duration}"
         summary = task["result_summary"] or ""
         if summary:
-            lines.append(summary[:200])
-        if cost:
-            lines.append(f"Cost: {cost}")
+            lines.append(summary[:2000])
+        if cost or turns:
+            lines.append(f"Cost: {cost}{turns_str}" if cost else f"Turns: {turns}")
     else:
         lines = [f"✗ Task #{task_id} ({agent_name}) — {status}"]
         if duration:
             lines[0] += f" after {duration}"
         error = task["error_message"] or ""
         if error:
-            lines.append(f"Error: {error[:200]}")
-        if cost:
-            lines.append(f"Cost: {cost}")
+            lines.append(f"Error: {error[:500]}")
+        if cost or turns:
+            lines.append(f"Cost: {cost}{turns_str}" if cost else f"Turns: {turns}")
 
     return "\n".join(lines)
 

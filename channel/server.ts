@@ -88,6 +88,7 @@ const mcp = new Server(
       'If the tag has an image_path attribute, Read that file — it is a photo the sender attached.',
       'If the tag has attachment_file_id, call download_attachment with that file_id to fetch the file, then Read the returned path.',
       "After processing each message: call bridge_acknowledge(tracking_id), then bridge_get_notifications(), then bridge_check_messages().",
+      "When bridge_get_notifications() returns queued notifications, they arrive as <channel source=\"task_completion\" chat_id=\"...\" task_id=\"...\"> tags — use the reply tool to forward the completion message to the chat_id.",
       "bridge_check_messages catches any messages that push notifications missed while you were busy.",
       "Reply with the reply tool — pass chat_id back. Keep replies concise (users are on mobile).",
       "Use bridge_dispatch to send tasks to agents. Use bridge_status to check running tasks.",
@@ -459,12 +460,48 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       case "bridge_get_notifications": {
-        try {
-          const output = bridgeCli(BRIDGE_SRC_PATH, "status");
-          return { content: [{ type: "text", text: output }] };
-        } catch {
+        const hasTable = msgDb
+          .query("SELECT name FROM sqlite_master WHERE type='table' AND name='outbound_messages'")
+          .get();
+        if (!hasTable) {
           return { content: [{ type: "text", text: "No pending notifications" }] };
         }
+
+        const pendingNotifs = msgDb
+          .query(
+            "SELECT * FROM outbound_messages WHERE source = 'notification' AND status = 'pending' ORDER BY created_at LIMIT 10"
+          )
+          .all() as import("./lib").OutboundRow[];
+
+        if (pendingNotifs.length === 0) {
+          return { content: [{ type: "text", text: "No pending notifications" }] };
+        }
+
+        for (const msg of pendingNotifs) {
+          const meta: Record<string, string> = {
+            source: "task_completion",
+            chat_id: msg.chat_id,
+          };
+          if (msg.task_id != null) meta.task_id = String(msg.task_id);
+
+          queuedNotification({
+            method: "notifications/claude/channel",
+            params: { content: msg.message_text, meta },
+          });
+
+          // Mark as 'notified' — processOutbound will still send the Telegram message
+          msgDb.run(
+            "UPDATE outbound_messages SET status = 'notified' WHERE id = ?",
+            [msg.id]
+          );
+        }
+
+        return {
+          content: [{
+            type: "text",
+            text: `Queued ${pendingNotifs.length} task completion notification(s) for delivery`,
+          }],
+        };
       }
 
       case "bridge_check_messages": {

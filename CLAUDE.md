@@ -30,7 +30,7 @@ research/                Research from architecture exploration
 ## Key Concepts
 
 - **Session = Agent + Project**: `backend` + `/projects/my-api` → session_id `backend--my-api`
-- **Agent .md files**: Generated in `~/.claude/agents/bridge--{session_id}.md` (native Claude Code format)
+- **Agent .md files**: Generated in `{bot_dir}/.claude/agents/bridge--{session_id}.md` (project-level, per-instance isolated)
 - **Stop hook**: Agent frontmatter includes Stop hook → calls on-complete.py → updates SQLite
 - **Worktree isolation**: Each task runs in isolated git worktree (no concurrent corruption)
 - **Auto Memory**: Claude Code auto-learns patterns. Bridge reads via `/memory` command.
@@ -70,7 +70,56 @@ remains stdlib-only. Version constraint is `"mcp>=1.0,<2.0"` to avoid breaking c
 - Error messages go to stderr, output goes to stdout
 - Exit code 0 = success, non-zero = error
 
-## Development Workflow
+## Development & Deploy Flow
+
+### Code → Build → Install → Setup → Restart → Test
+
+Claude-bridge có 2 layers: Python (core logic) + TypeScript (MCP channel server).
+Khi thay đổi code, phải follow đúng flow:
+
+```bash
+# 1. Sửa code
+#    - Python: src/claude_bridge/*.py
+#    - TypeScript: channel/server.ts (MCP tools exposed to Claude Code)
+
+# 2. Build TypeScript (nếu sửa channel/server.ts)
+cd channel && bun build server.ts --outdir dist && cd ..
+
+# 3. Run tests
+pytest tests/ --ignore=tests/test_telegram_poller.py
+
+# 4. Install from source (editable mode)
+pip install -e . --break-system-packages
+
+# 5. Re-setup bot dirs (copies channel dist + updates CLAUDE.md + .mcp.json)
+bridge-cli setup-bot ~/projects/bridge-bot                                    # main instance
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge-cli setup-bot ~/projects/bridge-bot-tam  # tam instance
+
+# 6. Restart instances
+#    Main: systemctl --user restart claude-bridge
+#    Tam:  CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge-cli daemon stop && bridge-cli daemon start
+
+# 7. Test trên Telegram trước khi push
+
+# 8. Commit, tag, push, release (khi đã test OK)
+#    git commit → git tag v0.X.Y → git push --tags → gh release create v0.X.Y
+#    GitHub Actions auto-publish to PyPI
+```
+
+QUAN TRỌNG:
+- MCP tools phải có trong CẢ HAI: Python mcp_server.py VÀ TypeScript channel/server.ts
+- Python mcp_server.py = logic implementation
+- TypeScript channel/server.ts = tool exposed cho Claude Code (gọi bridge-cli CLI)
+- Nếu chỉ thêm vào Python mà quên TypeScript → Claude Code không thấy tool
+- setup-bot copy channel/dist/server.js vào CLAUDE_BRIDGE_HOME/channel/ — KHÔNG copy manual
+
+### Multi-instance
+- Main: CLAUDE_BRIDGE_HOME=~/.claude-bridge (default)
+- Tam: CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam
+- Mỗi instance có DB, agents, config, channel riêng
+- on_complete hook có CLAUDE_BRIDGE_HOME prefix
+
+### TDD Process
 
 Implementation follows a strict TDD process defined in `.claude/rules/phase-plan-approach.md`.
 This process is reusable across all phases (1, 2, 3).
