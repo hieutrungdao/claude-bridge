@@ -370,9 +370,10 @@ def cmd_create_agent(db: BridgeDB, args):
     session_id = derive_session_id(args.name, project_dir)
     agent_file_name = derive_agent_file_name(session_id)
 
-    # Generate agent .md
+    # Generate agent .md — write to bot_dir/.claude/agents/ when configured
+    bot_dir = load_config().get("bot_dir")
     content = generate_agent_md(session_id, args.name, project_dir, args.purpose, model=model)
-    agent_file_path = write_agent_md(session_id, content)
+    agent_file_path = write_agent_md(session_id, content, bot_dir=bot_dir)
 
     # Install Stop hook in project settings (frontmatter hooks don't fire in -p mode)
     from .agent_md import install_stop_hook
@@ -1139,7 +1140,8 @@ def cmd_set_model(db: BridgeDB, args):
         agent["session_id"], args.name, agent["project_dir"],
         agent["purpose"], model=args.model,
     )
-    write_agent_md(agent["session_id"], content)
+    bot_dir = load_config().get("bot_dir")
+    write_agent_md(agent["session_id"], content, bot_dir=bot_dir)
 
     print(f"Agent '{args.name}' model changed to {args.model}.")
     return 0
