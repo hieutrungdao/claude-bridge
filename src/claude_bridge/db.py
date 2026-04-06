@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 def _default_db_path() -> str:
@@ -335,7 +335,7 @@ class BridgeDB:
         self.conn.execute(
             """UPDATE agents SET total_tasks = total_tasks + 1,
                last_task_at = ? WHERE session_id = ?""",
-            (datetime.now().isoformat(), session_id),
+            (datetime.now(timezone.utc).isoformat(), session_id),
         )
         self.conn.commit()
 
@@ -492,7 +492,7 @@ class BridgeDB:
         response = "approved" if approved else "denied"
         cursor = self.conn.execute(
             "UPDATE permissions SET status = ?, response = ?, responded_at = ? WHERE id = ? AND status = 'pending'",
-            (response, response, datetime.now().isoformat(), request_id),
+            (response, response, datetime.now(timezone.utc).isoformat(), request_id),
         )
         self.conn.commit()
         return cursor.rowcount > 0
@@ -503,7 +503,7 @@ class BridgeDB:
             """UPDATE permissions SET status = 'denied', response = 'timeout',
                responded_at = ? WHERE status = 'pending'
                AND (julianday('now') - julianday(created_at)) * 86400 > timeout_seconds""",
-            (datetime.now().isoformat(),),
+            (datetime.now(timezone.utc).isoformat(),),
         )
         self.conn.commit()
         return cursor.rowcount
@@ -647,7 +647,7 @@ class BridgeDB:
         """Mark a notification as sent."""
         self.conn.execute(
             "UPDATE notifications SET status = 'sent', sent_at = ? WHERE id = ?",
-            (datetime.now().isoformat(), notification_id),
+            (datetime.now(timezone.utc).isoformat(), notification_id),
         )
         self.conn.commit()
 
@@ -673,7 +673,7 @@ class BridgeDB:
         max_cost_usd: float | None = None,
     ) -> str:
         """Create a new loop record. Returns loop_id."""
-        from datetime import datetime as _dt
+        from datetime import datetime as _dt, timezone as _tz
         import time as _time
         # Use nanoseconds for uniqueness even when called multiple times per second
         ts = _time.time_ns()
@@ -681,7 +681,7 @@ class BridgeDB:
         from .session import derive_session_id
         session_id = derive_session_id(agent, project)
         loop_id = f"{session_id}--loop--{ts}"
-        started_at = _dt.now().isoformat()
+        started_at = _dt.now(_tz.utc).isoformat()
         self.conn.execute(
             """INSERT INTO loops
                (loop_id, agent, project, goal, done_when, loop_type, status,
@@ -733,8 +733,8 @@ class BridgeDB:
         prompt: str,
     ) -> int:
         """Create a new loop iteration record. Returns iteration id."""
-        from datetime import datetime as _dt
-        started_at = _dt.now().isoformat()
+        from datetime import datetime as _dt, timezone as _tz
+        started_at = _dt.now(_tz.utc).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO loop_iterations
                (loop_id, iteration_num, prompt, status, started_at)
@@ -804,7 +804,7 @@ class BridgeDB:
         Sets next_run_at = now + interval_minutes.
         Raises sqlite3.IntegrityError on duplicate (name, agent_name).
         """
-        next_run_at = (datetime.utcnow() + timedelta(minutes=interval_minutes)).isoformat()
+        next_run_at = (datetime.now(timezone.utc) + timedelta(minutes=interval_minutes)).isoformat()
         cursor = self.conn.execute(
             """INSERT INTO schedules
                (name, agent_name, prompt, interval_minutes, channel, channel_chat_id, user_id,
@@ -871,7 +871,7 @@ class BridgeDB:
         new_errors = (schedule["consecutive_errors"] or 0) + 1
         # enabled=0 when 5+ consecutive errors (auto-pause); else keep current value
         new_enabled = 0 if new_errors >= 5 else schedule["enabled"]
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Backoff: anchor on last_run_at if available, else now
         anchor_str = schedule["last_run_at"]
         if anchor_str:

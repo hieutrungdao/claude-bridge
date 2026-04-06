@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .db import BridgeDB
 from .dispatcher import pid_alive, kill_process, spawn_task, get_result_file
@@ -39,7 +39,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                     task_id,
                     status="failed",
                     error_message="No PID recorded",
-                    completed_at=datetime.now().isoformat(),
+                    completed_at=datetime.now(timezone.utc).isoformat(),
                 )
                 db.update_agent_state(session_id, "idle")
                 continue
@@ -60,7 +60,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                         duration_ms=result.get("duration_ms", 0),
                         num_turns=result.get("num_turns", 0),
                         exit_code=0,
-                        completed_at=datetime.now().isoformat(),
+                        completed_at=datetime.now(timezone.utc).isoformat(),
                     )
                     db.increment_agent_tasks(session_id)
                     print(f"[watcher] Task #{task_id} ({session_id}) completed (hook missed)")
@@ -71,7 +71,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                         status="failed",
                         error_message=error,
                         exit_code=-1,
-                        completed_at=datetime.now().isoformat(),
+                        completed_at=datetime.now(timezone.utc).isoformat(),
                     )
                     db.increment_agent_tasks(session_id)
                     print(f"[watcher] Task #{task_id} ({session_id}) failed (hook missed)")
@@ -89,7 +89,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                         next_task_id,
                         status="running", pid=pid,
                         result_file=next_result_file,
-                        started_at=datetime.now().isoformat(),
+                        started_at=datetime.now(timezone.utc).isoformat(),
                     )
                 else:
                     db.update_agent_state(session_id, "idle")
@@ -97,14 +97,17 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
             elif started_at:
                 # Check timeout
                 started = datetime.fromisoformat(started_at)
-                elapsed = (datetime.now() - started).total_seconds()
+                # Handle naive timestamps from before UTC fix
+                if started.tzinfo is None:
+                    started = started.replace(tzinfo=timezone.utc)
+                elapsed = (datetime.now(timezone.utc) - started).total_seconds()
                 if elapsed > timeout_minutes * 60:
                     kill_process(pid)
                     db.update_task(
                         task_id,
                         status="timeout",
                         error_message=f"Timed out after {timeout_minutes} minutes",
-                        completed_at=datetime.now().isoformat(),
+                        completed_at=datetime.now(timezone.utc).isoformat(),
                     )
                     db.update_agent_state(session_id, "idle")
                     print(f"[watcher] Task #{task_id} ({session_id}) timed out after {timeout_minutes}m")

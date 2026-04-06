@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import re
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -124,7 +124,7 @@ def create_workspace(session_id: str, agent_name: str, project_dir: str, purpose
         "project_dir": project_dir,
         "session_id": session_id,
         "purpose": purpose,
-        "created_at": datetime.now().isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat(),
     }
     metadata_path = os.path.join(workspace, "metadata.json")
     with open(metadata_path, "w") as f:

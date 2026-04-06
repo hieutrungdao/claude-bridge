@@ -6,7 +6,7 @@ Called by cron every minute: bridge-cli scheduler
 from __future__ import annotations
 
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from .db import BridgeDB
 
@@ -83,7 +83,7 @@ def dispatch_for_schedule(db: BridgeDB, schedule: dict, agent: dict) -> int:
         pid=pid,
         result_file=result_file,
         model=model,
-        started_at=datetime.utcnow().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
         user_id=user_id,
     )
     db.update_agent_state(session_id, "running")
@@ -96,7 +96,7 @@ def run_scheduler(db: BridgeDB) -> None:
     Called by cron every minute. Always exits cleanly (cron jobs must not fail).
     Logs errors to stderr for visibility in scheduler.log.
     """
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     due = db.get_due_schedules(now)
 
     for schedule in due:

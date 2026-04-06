@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .db import BridgeDB
 from .session import (
@@ -512,7 +512,7 @@ def cmd_dispatch(db: BridgeDB, args):
         pid=pid,
         result_file=result_file,
         model=model,
-        started_at=datetime.now().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state(session_id, "running")
 
@@ -582,7 +582,7 @@ def cmd_kill(db: BridgeDB, args):
     db.update_task(
         running["id"],
         status="killed",
-        completed_at=datetime.now().isoformat(),
+        completed_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state(agent["session_id"], "idle")
 
@@ -1583,7 +1583,7 @@ def cmd_team_dispatch(db: BridgeDB, args):
         pid=pid,
         result_file=result_file,
         model=model,
-        started_at=datetime.now().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state(session_id, "running")
 

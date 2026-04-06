@@ -15,7 +15,7 @@ import argparse
 import json
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add parent to path so we can import from the package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -72,7 +72,7 @@ def _check_team_aggregation(db: BridgeDB, parent_task_id: int):
         status="done",
         cost_usd=total_cost,
         result_summary=aggregated_summary[:500],
-        completed_at=datetime.now().isoformat(),
+        completed_at=datetime.now(timezone.utc).isoformat(),
     )
 
     done_count = sum(1 for s in subtasks if s["status"] == "done")
@@ -141,7 +141,7 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
             num_turns=turns,
             exit_code=exit_code,
             error_message=error,
-            completed_at=datetime.now().isoformat(),
+            completed_at=datetime.now(timezone.utc).isoformat(),
         )
 
         # Check if this is a sub-task — aggregate parent if all siblings done
@@ -187,7 +187,7 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
                 next_task_id,
                 status="running", pid=pid,
                 result_file=next_result_file,
-                started_at=datetime.now().isoformat(),
+                started_at=datetime.now(timezone.utc).isoformat(),
             )
             # Agent stays running
         else:

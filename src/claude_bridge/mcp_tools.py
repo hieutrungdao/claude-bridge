@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .db import BridgeDB
 from .message_db import MessageDB
@@ -130,7 +130,7 @@ def tool_dispatch(
 
     db.update_task(
         task_id, status="running", pid=pid, result_file=result_file,
-        model=task_model, started_at=datetime.now().isoformat(),
+        model=task_model, started_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state(session_id, "running")
 
@@ -170,7 +170,7 @@ def tool_kill(db: BridgeDB, agent: str) -> str:
 
     pid = running["pid"]
     kill_process(pid)
-    db.update_task(running["id"], status="killed", completed_at=datetime.now().isoformat())
+    db.update_task(running["id"], status="killed", completed_at=datetime.now(timezone.utc).isoformat())
     db.update_agent_state(a["session_id"], "idle")
 
     return json.dumps({"status": "killed", "task_id": running["id"], "pid": pid})

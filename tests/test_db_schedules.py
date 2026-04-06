@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from claude_bridge.db import BridgeDB
 
@@ -41,9 +41,9 @@ class TestAddSchedule:
         assert s["channel_chat_id"] == "123456"
 
     def test_add_sets_next_run_at(self, db):
-        before = datetime.utcnow()
+        before = datetime.now(timezone.utc)
         db.add_schedule("s3", "testagent", "do it", 15)
-        after = datetime.utcnow()
+        after = datetime.now(timezone.utc)
         s = db.get_schedule_by_name("s3")
         next_run = datetime.fromisoformat(s["next_run_at"])
         assert next_run >= before + timedelta(minutes=14)
@@ -73,33 +73,33 @@ class TestGetDueSchedules:
     def test_returns_due(self, db):
         # Create a schedule whose next_run_at is in the past
         sid = db.add_schedule("past", "testagent", "do it", 60)
-        past = (datetime.utcnow() - timedelta(minutes=1)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         db.conn.execute("UPDATE schedules SET next_run_at = ? WHERE id = ?", (past, sid))
         db.conn.commit()
 
-        due = db.get_due_schedules(datetime.utcnow())
+        due = db.get_due_schedules(datetime.now(timezone.utc))
         names = [d["name"] for d in due]
         assert "past" in names
 
     def test_skips_future(self, db):
         db.add_schedule("future", "testagent", "do it", 60)
         # next_run_at is now + 60m by default — should not be due
-        due = db.get_due_schedules(datetime.utcnow())
+        due = db.get_due_schedules(datetime.now(timezone.utc))
         names = [d["name"] for d in due]
         assert "future" not in names
 
     def test_skips_disabled(self, db):
         sid = db.add_schedule("disabled", "testagent", "do it", 60)
-        past = (datetime.utcnow() - timedelta(minutes=1)).isoformat()
+        past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
         db.conn.execute("UPDATE schedules SET next_run_at = ?, enabled = 0 WHERE id = ?", (past, sid))
         db.conn.commit()
 
-        due = db.get_due_schedules(datetime.utcnow())
+        due = db.get_due_schedules(datetime.now(timezone.utc))
         names = [d["name"] for d in due]
         assert "disabled" not in names
 
     def test_exact_due_time(self, db):
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         sid = db.add_schedule("exact", "testagent", "do it", 60)
         db.conn.execute("UPDATE schedules SET next_run_at = ? WHERE id = ?", (now.isoformat(), sid))
         db.conn.commit()
@@ -111,7 +111,7 @@ class TestGetDueSchedules:
 class TestUpdateScheduleSuccess:
     def test_updates_run_count_and_next_run(self, db):
         sid = db.add_schedule("s", "testagent", "do it", 30)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         db.update_schedule_success(sid, now)
         s = db.get_schedule_by_name("s")
         assert s["run_count"] == 1
@@ -126,13 +126,13 @@ class TestUpdateScheduleSuccess:
         sid = db.add_schedule("s2", "testagent", "do it", 10)
         db.conn.execute("UPDATE schedules SET consecutive_errors = 3 WHERE id = ?", (sid,))
         db.conn.commit()
-        db.update_schedule_success(sid, datetime.utcnow())
+        db.update_schedule_success(sid, datetime.now(timezone.utc))
         s = db.get_schedule_by_name("s2")
         assert s["consecutive_errors"] == 0
 
     def test_run_once_disables_after_run(self, db):
         sid = db.add_schedule("once", "testagent", "do once", 60, run_once=True)
-        db.update_schedule_success(sid, datetime.utcnow())
+        db.update_schedule_success(sid, datetime.now(timezone.utc))
         s = db.get_schedule_by_name("once")
         assert s["enabled"] == 0
 
@@ -156,7 +156,7 @@ class TestUpdateScheduleError:
 
     def test_backoff_next_run(self, db):
         sid = db.add_schedule("s_back", "testagent", "do it", 60)
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         # Set last_run_at to now
         db.conn.execute("UPDATE schedules SET last_run_at = ?, consecutive_errors = 1 WHERE id = ?", (now.isoformat(), sid))
         db.conn.commit()

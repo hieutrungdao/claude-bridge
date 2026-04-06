@@ -11,7 +11,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .db import BridgeDB
 from .loop_evaluator import (
@@ -535,7 +535,7 @@ def _dispatch_iteration(
         pid=pid,
         result_file=result_file,
         model=model,
-        started_at=datetime.now().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state(session_id, "running")
 
@@ -595,7 +595,7 @@ def on_task_complete(
             iteration_record = it
             break
 
-    finished_at = datetime.now().isoformat()
+    finished_at = datetime.now(timezone.utc).isoformat()
 
     # Determine if the task itself failed
     task = db.get_task(int(task_id))
@@ -714,7 +714,7 @@ def on_task_complete(
         db.update_loop(
             loop_id,
             status="failed",
-            finished_at=datetime.now().isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
             finish_reason=f"dispatch_error: {str(e)[:200]}",
         )
 
@@ -735,7 +735,7 @@ def cancel_loop(db: BridgeDB, loop_id: str) -> bool:
     db.update_loop(
         loop_id,
         status="cancelled",
-        finished_at=datetime.now().isoformat(),
+        finished_at=datetime.now(timezone.utc).isoformat(),
         finish_reason="user_cancelled",
     )
     return True
@@ -761,7 +761,7 @@ def approve_loop(db: BridgeDB, loop_id: str) -> bool:
         loop_id,
         status="done",
         pending_approval=0,
-        finished_at=datetime.now().isoformat(),
+        finished_at=datetime.now(timezone.utc).isoformat(),
         finish_reason="manual_approved",
     )
     return True
@@ -795,7 +795,7 @@ def reject_loop(db: BridgeDB, loop_id: str, feedback: str = "") -> bool:
             loop_id,
             status="done",
             pending_approval=0,
-            finished_at=datetime.now().isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
             finish_reason="max_iterations",
         )
         return True
@@ -816,7 +816,7 @@ def reject_loop(db: BridgeDB, loop_id: str, feedback: str = "") -> bool:
         db.update_loop(
             loop_id,
             status="failed",
-            finished_at=datetime.now().isoformat(),
+            finished_at=datetime.now(timezone.utc).isoformat(),
             finish_reason=f"dispatch_error: {str(e)[:200]}",
         )
         return False

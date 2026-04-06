@@ -2,7 +2,7 @@
 
 import json
 from unittest.mock import patch
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -29,7 +29,7 @@ def agent_with_running_task(db, tmp_path):
         status="running",
         pid=99999,
         result_file=result_file,
-        started_at=datetime.now().isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
     )
     db.update_agent_state("backend--api", "running")
     return {"task_id": tid, "result_file": result_file, "session_id": "backend--api"}
@@ -74,7 +74,7 @@ class TestWatcherTimeout:
         db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
         tid = db.create_task("backend--api", "long task")
         # Set started_at to 40 minutes ago
-        started = (datetime.now() - timedelta(minutes=40)).isoformat()
+        started = (datetime.now(timezone.utc) - timedelta(minutes=40)).isoformat()
         db.update_task(tid, status="running", pid=88888, started_at=started)
         db.update_agent_state("backend--api", "running")
 
