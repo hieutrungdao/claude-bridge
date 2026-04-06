@@ -297,6 +297,67 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ["loop_id"],
       },
     },
+    {
+      name: "bridge_schedule_add",
+      description: "Create a recurring scheduled task for an agent.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          agent: { type: "string", description: "Agent name" },
+          prompt: { type: "string", description: "Task prompt to run on each schedule" },
+          interval_minutes: { type: "number", description: "Interval in minutes between runs" },
+          name: { type: "string", description: "Schedule name (auto-generated if omitted)" },
+          chat_id: { type: "string", description: "Telegram chat ID for completion notifications" },
+          user_id: { type: "string", description: "Originating user ID" },
+          once: { type: "boolean", description: "Run once then disable (default: false)" },
+        },
+        required: ["agent", "prompt", "interval_minutes"],
+      },
+    },
+    {
+      name: "bridge_schedule_remove",
+      description: "Remove a schedule by name or ID.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name_or_id: { type: "string", description: "Schedule name or ID" },
+        },
+        required: ["name_or_id"],
+      },
+    },
+    {
+      name: "bridge_schedule_list",
+      description: "List all schedules, optionally filtered by agent.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          agent: { type: "string", description: "Agent name (optional, filters by agent)" },
+          all_schedules: { type: "boolean", description: "Include disabled/paused schedules (default: false)" },
+        },
+      },
+    },
+    {
+      name: "bridge_schedule_pause",
+      description: "Pause a schedule by name or ID.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name_or_id: { type: "string", description: "Schedule name or ID" },
+        },
+        required: ["name_or_id"],
+      },
+    },
+    {
+      name: "bridge_schedule_resume",
+      description: "Resume a paused schedule by name or ID.",
+      inputSchema: {
+        type: "object" as const,
+        properties: {
+          name_or_id: { type: "string", description: "Schedule name or ID" },
+        },
+        required: ["name_or_id"],
+      },
+    },
   ],
 }));
 
@@ -512,6 +573,47 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       case "bridge_loop_history": {
         const { loop_id } = args as { loop_id: string };
         const output = bridgeCli(BRIDGE_SRC_PATH, "loop-history", [loop_id]);
+        return { content: [{ type: "text", text: output }] };
+      }
+
+      case "bridge_schedule_add": {
+        const { agent, prompt, interval_minutes, name: scheduleName, chat_id, user_id, once } = args as {
+          agent: string; prompt: string; interval_minutes: number;
+          name?: string; chat_id?: string; user_id?: string; once?: boolean;
+        };
+        const cliArgs = [agent, prompt, "--every", String(interval_minutes), "--channel", "telegram"];
+        if (scheduleName) cliArgs.push("--name", scheduleName);
+        if (chat_id) cliArgs.push("--chat-id", chat_id);
+        if (user_id) cliArgs.push("--user-id", user_id);
+        if (once) cliArgs.push("--once");
+        const output = bridgeCli(BRIDGE_SRC_PATH, "schedule-add", cliArgs);
+        return { content: [{ type: "text", text: output }] };
+      }
+
+      case "bridge_schedule_remove": {
+        const { name_or_id } = args as { name_or_id: string };
+        const output = bridgeCli(BRIDGE_SRC_PATH, "schedule-remove", [name_or_id]);
+        return { content: [{ type: "text", text: output }] };
+      }
+
+      case "bridge_schedule_list": {
+        const { agent, all_schedules } = (args ?? {}) as { agent?: string; all_schedules?: boolean };
+        const cliArgs: string[] = [];
+        if (agent) cliArgs.push("--agent", agent);
+        if (all_schedules) cliArgs.push("--all");
+        const output = bridgeCli(BRIDGE_SRC_PATH, "schedule-list", cliArgs);
+        return { content: [{ type: "text", text: output }] };
+      }
+
+      case "bridge_schedule_pause": {
+        const { name_or_id } = args as { name_or_id: string };
+        const output = bridgeCli(BRIDGE_SRC_PATH, "schedule-pause", [name_or_id]);
+        return { content: [{ type: "text", text: output }] };
+      }
+
+      case "bridge_schedule_resume": {
+        const { name_or_id } = args as { name_or_id: string };
+        const output = bridgeCli(BRIDGE_SRC_PATH, "schedule-resume", [name_or_id]);
         return { content: [{ type: "text", text: output }] };
       }
 
