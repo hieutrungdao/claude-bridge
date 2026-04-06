@@ -11,6 +11,7 @@ import { Database } from "bun:sqlite";
 import { readFileSync, mkdirSync, writeFileSync, readdirSync, statSync, unlinkSync, existsSync } from "fs";
 import { execSync, execFileSync } from "child_process";
 import { join } from "path";
+import { sendTelegramChunked } from "./format";
 
 /** Maximum file size in bytes (20MB — Telegram Bot API limit) */
 export const FILE_SIZE_LIMIT = 20 * 1024 * 1024;
@@ -357,7 +358,7 @@ export function processRetries(
 export async function processOutbound(
   db: Database,
   notifier: McpNotifier,
-  sendMessage: (chatId: string, text: string) => Promise<void>
+  sendMessage: (chatId: string, text: string, opts?: any) => Promise<void>
 ): Promise<{ sent: number; failed: number }> {
   const hasTable = db
     .query("SELECT name FROM sqlite_master WHERE type='table' AND name='outbound_messages'")
@@ -375,7 +376,7 @@ export async function processOutbound(
 
   for (const msg of pending) {
     try {
-      await sendMessage(msg.chat_id, msg.message_text);
+      await sendTelegramChunked(sendMessage, msg.chat_id, msg.message_text);
       db.run(
         "UPDATE outbound_messages SET status = 'sent', sent_at = datetime('now') WHERE id = ?",
         [msg.id]
@@ -449,9 +450,7 @@ export async function handleReply(
     return "Error: chat not in allowlist";
   }
 
-  const chunks = text.length > 4096 ? text.match(/.{1,4096}/gs) ?? [text] : [text];
-  for (const chunk of chunks) {
-    await sendMessage(chatId, chunk, replyTo ? { reply_parameters: { message_id: Number(replyTo) } } : undefined);
-  }
+  const opts = replyTo ? { reply_parameters: { message_id: Number(replyTo) } } : undefined;
+  await sendTelegramChunked(sendMessage, chatId, text, opts);
   return "sent";
 }

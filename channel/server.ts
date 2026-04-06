@@ -1018,7 +1018,7 @@ async function main() {
     try {
       await processOutbound(
         msgDb, bgNotifier,
-        async (chatId, text) => { await bot.api.sendMessage(chatId, text); }
+        async (chatId, text, opts) => { await bot.api.sendMessage(chatId, text, opts ?? {}); }
       );
     } catch (err) {
       process.stderr.write(`bridge channel: outbound poller error: ${err}\n`);

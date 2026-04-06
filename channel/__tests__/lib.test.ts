@@ -570,7 +570,7 @@ describe("handleReply", () => {
     expect(sent[0]).toBe("hello");
   });
 
-  test("chunks message over 4096 chars", async () => {
+  test("chunks message over 4000 chars", async () => {
     const sent: string[] = [];
     const longMsg = "x".repeat(5000);
     await handleReply(
@@ -578,15 +578,15 @@ describe("handleReply", () => {
       "123", longMsg
     );
     expect(sent.length).toBe(2);
-    expect(sent[0].length).toBe(4096);
-    expect(sent[1].length).toBe(904);
+    expect(sent[0].length).toBe(4000);
+    expect(sent[1].length).toBe(1000);
   });
 
-  test("exact 4096 chars not split", async () => {
+  test("exact 4000 chars not split", async () => {
     const sent: string[] = [];
     await handleReply(
       async (chatId, text) => { sent.push(text); },
-      "123", "x".repeat(4096)
+      "123", "x".repeat(4000)
     );
     expect(sent.length).toBe(1);
   });
