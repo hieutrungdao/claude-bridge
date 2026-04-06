@@ -36,6 +36,11 @@ TOOL_NAMES = [
     "bridge_loop_history",
     "bridge_loop_notify",
     "bridge_parse_loop_command",
+    "bridge_schedule_add",
+    "bridge_schedule_remove",
+    "bridge_schedule_list",
+    "bridge_schedule_pause",
+    "bridge_schedule_resume",
 ]
 
 
@@ -249,6 +254,66 @@ def create_server(db: BridgeDB | None = None, msg_db: MessageDB | None = None) -
             text: Raw Telegram message text from user.
         """
         return mcp_tools.tool_parse_loop_command(text)
+
+    # --- Schedule Tools ---
+
+    @server.tool()
+    def bridge_schedule_add(
+        agent_name: str,
+        prompt: str,
+        interval_minutes: int,
+        name: str | None = None,
+        chat_id: str | None = None,
+        user_id: str | None = None,
+    ) -> str:
+        """Create a recurring scheduled task.
+
+        Args:
+            agent_name: Agent to dispatch to (e.g. 'vn-trader').
+            prompt: Prompt to run on each scheduled execution.
+            interval_minutes: How often to run in minutes (e.g. 30 for every 30m).
+            name: Schedule name — auto-generated from agent+prompt if omitted.
+            chat_id: Telegram chat_id for completion notifications.
+                     ALWAYS pass this from the inbound message context.
+            user_id: Originating Telegram user_id.
+        """
+        return mcp_tools.tool_schedule_add(_db(), agent_name, prompt, interval_minutes, name, chat_id, user_id)
+
+    @server.tool()
+    def bridge_schedule_remove(name_or_id: str) -> str:
+        """Remove a schedule by name or numeric ID.
+
+        Args:
+            name_or_id: Schedule name (e.g. 'news-update') or numeric ID.
+        """
+        return mcp_tools.tool_schedule_remove(_db(), name_or_id)
+
+    @server.tool()
+    def bridge_schedule_list(agent_name: str | None = None) -> str:
+        """List active schedules, optionally filtered by agent.
+
+        Args:
+            agent_name: Filter by agent name (optional).
+        """
+        return mcp_tools.tool_schedule_list(_db(), agent_name)
+
+    @server.tool()
+    def bridge_schedule_pause(name_or_id: str) -> str:
+        """Pause a schedule (stops it from dispatching until resumed).
+
+        Args:
+            name_or_id: Schedule name or numeric ID.
+        """
+        return mcp_tools.tool_schedule_pause(_db(), name_or_id)
+
+    @server.tool()
+    def bridge_schedule_resume(name_or_id: str) -> str:
+        """Resume a paused schedule. Also resets consecutive error count.
+
+        Args:
+            name_or_id: Schedule name or numeric ID.
+        """
+        return mcp_tools.tool_schedule_resume(_db(), name_or_id)
 
     return server
 

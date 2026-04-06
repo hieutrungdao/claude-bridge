@@ -615,3 +615,127 @@ def tool_parse_loop_command(text: str) -> str:
         "loop_id": cmd.loop_id,
         "max_iterations": cmd.max_iterations,
     })
+
+
+# --- Schedule Tools ---
+
+def _slug(text: str, max_len: int = 20) -> str:
+    """Convert text to a slug for auto-naming schedules."""
+    import re
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s[:max_len]
+
+
+def tool_schedule_add(
+    db: BridgeDB,
+    agent_name: str,
+    prompt: str,
+    interval_minutes: int,
+    name: str | None = None,
+    chat_id: str | None = None,
+    user_id: str | None = None,
+) -> str:
+    """Create a recurring scheduled task.
+
+    Args:
+        db: BridgeDB instance.
+        agent_name: Agent to dispatch to.
+        prompt: Prompt to run on each schedule.
+        interval_minutes: How often to run (in minutes).
+        name: Schedule name (auto-generated from agent+prompt if omitted).
+        chat_id: Telegram chat_id for completion notifications.
+        user_id: Originating Telegram user_id.
+    """
+    agent = db.get_agent(agent_name)
+    if not agent:
+        return json.dumps({"error": f"Agent '{agent_name}' not found"})
+
+    schedule_name = name or f"{agent_name}-{_slug(prompt)}"
+    channel = "telegram" if chat_id else "cli"
+
+    try:
+        sid = db.add_schedule(
+            name=schedule_name,
+            agent_name=agent_name,
+            prompt=prompt,
+            interval_minutes=interval_minutes,
+            channel=channel,
+            channel_chat_id=chat_id,
+            user_id=user_id,
+        )
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            return json.dumps({"error": f"Schedule '{schedule_name}' already exists for agent '{agent_name}'"})
+        return json.dumps({"error": str(e)})
+
+    s = db.get_schedule_by_name(schedule_name)
+    return json.dumps({
+        "schedule_id": sid,
+        "name": schedule_name,
+        "agent": agent_name,
+        "interval_minutes": interval_minutes,
+        "next_run_at": s["next_run_at"] if s else None,
+        "status": "created",
+    })
+
+
+def tool_schedule_remove(db: BridgeDB, name_or_id: str) -> str:
+    """Remove a schedule by name or ID.
+
+    Args:
+        db: BridgeDB instance.
+        name_or_id: Schedule name or numeric ID.
+    """
+    if db.remove_schedule(name_or_id):
+        return json.dumps({"status": "removed", "name_or_id": name_or_id})
+    return json.dumps({"error": f"Schedule '{name_or_id}' not found"})
+
+
+def tool_schedule_list(db: BridgeDB, agent_name: str | None = None) -> str:
+    """List active schedules, optionally filtered by agent.
+
+    Args:
+        db: BridgeDB instance.
+        agent_name: Filter by agent name (optional).
+    """
+    schedules = db.list_schedules(agent_name=agent_name)
+    result = []
+    for s in schedules:
+        result.append({
+            "id": s["id"],
+            "name": s["name"],
+            "agent": s["agent_name"],
+            "prompt": s["prompt"][:80],
+            "interval_minutes": s["interval_minutes"],
+            "run_count": s["run_count"],
+            "consecutive_errors": s["consecutive_errors"],
+            "enabled": bool(s["enabled"]),
+            "next_run_at": s["next_run_at"],
+            "last_error": s["last_error"],
+        })
+    return json.dumps({"schedules": result})
+
+
+def tool_schedule_pause(db: BridgeDB, name_or_id: str) -> str:
+    """Pause a schedule.
+
+    Args:
+        db: BridgeDB instance.
+        name_or_id: Schedule name or numeric ID.
+    """
+    if db.pause_schedule(name_or_id):
+        return json.dumps({"status": "paused", "name_or_id": name_or_id})
+    return json.dumps({"error": f"Schedule '{name_or_id}' not found"})
+
+
+def tool_schedule_resume(db: BridgeDB, name_or_id: str) -> str:
+    """Resume a paused schedule. Also resets consecutive_errors.
+
+    Args:
+        db: BridgeDB instance.
+        name_or_id: Schedule name or numeric ID.
+    """
+    if db.resume_schedule(name_or_id):
+        return json.dumps({"status": "resumed", "name_or_id": name_or_id})
+    return json.dumps({"error": f"Schedule '{name_or_id}' not found"})

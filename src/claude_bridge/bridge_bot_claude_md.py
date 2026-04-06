@@ -62,6 +62,37 @@ IMPORTANT: Always call `bridge_acknowledge(tracking_id)` after processing. If yo
 
 Note: Team commands are not yet exposed as MCP tools. Guide user to run them via `bridge-cli` in terminal.
 
+### Scheduled Tasks
+
+Create recurring tasks that run automatically on an interval.
+
+| User says | Tool |
+|-----------|------|
+| `/schedule <agent> "<prompt>" every <N>m` | `bridge_schedule_add(agent_name, prompt, interval_minutes, chat_id=chat_id)` |
+| `/schedule <agent> "<prompt>" every <N>h` | `bridge_schedule_add(agent_name, prompt, interval_minutes=N*60, chat_id=chat_id)` |
+| `/schedules` or `show schedules` | `bridge_schedule_list()` |
+| `/schedules <agent>` | `bridge_schedule_list(agent_name=agent)` |
+| `/unschedule <name_or_id>` | `bridge_schedule_remove(name_or_id)` |
+| `/schedule-pause <name_or_id>` | `bridge_schedule_pause(name_or_id)` |
+| `/schedule-resume <name_or_id>` | `bridge_schedule_resume(name_or_id)` |
+
+#### Schedule Rules
+
+- ALWAYS pass `chat_id` from the inbound message so completion notifications go to the correct chat.
+- Schedule names are auto-generated from agent+prompt if not specified (e.g. `vn-trader-run-news-update`).
+- Schedules run via system cron every minute — a separate `bridge-cli scheduler` process.
+- When a schedule is auto-paused (5 consecutive errors), tell the user: "⚠️ Schedule paused — use /schedule-resume <name> to re-enable."
+
+#### Schedule Natural Language Examples
+
+| User says | Action |
+|-----------|--------|
+| "schedule vn-trader to run news update every 30 minutes" | `bridge_schedule_add("vn-trader", "run news update", 30, chat_id=chat_id)` |
+| "run daily-report every 1440m" | `bridge_schedule_add(agent, "daily report", 1440, chat_id=chat_id)` |
+| "show my schedules" | `bridge_schedule_list()` |
+| "cancel news-update schedule" | `bridge_schedule_remove("news-update")` |
+| "pause the news-update" | `bridge_schedule_pause("news-update")` |
+
 ### Goal Loop
 
 Goal Loop repeats tasks until a done condition is met. Use for fix cycles, code generation, or anything needing multiple attempts.
@@ -143,6 +174,9 @@ If the message doesn't start with /, infer the intent:
 | "reject loop" / "try again" (reply to loop msg) | `bridge_loop_reject(loop_id)` |
 | "show agents" / "list agents" | `bridge_agents()` |
 | "what did <agent> do" / "history" | `bridge_history(agent)` |
+| "schedule <agent> to <prompt> every <N>m" | `bridge_schedule_add(agent_name, prompt, N, chat_id=chat_id)` |
+| "show schedules" / "my schedules" | `bridge_schedule_list()` |
+| "cancel/remove schedule <name>" | `bridge_schedule_remove(name)` |
 | Greeting (hi, hello) | Reply with short intro + suggest `/agents` or `/help` |
 
 ### Auto-Create Agent for New Requests
@@ -300,6 +334,11 @@ IMPORTANT: Always call bridge_get_notifications() AFTER processing messages.
 | `/status <agent>` or `what's <agent> doing` | `bridge_status(agent)` |
 | `/kill <agent>` or `stop <agent>` | `bridge_kill(agent)` |
 | `/history <agent>` or `what did <agent> do` | `bridge_history(agent)` |
+| `/schedule <agent> "<prompt>" every <N>m` | `bridge_schedule_add(agent_name, prompt, interval_minutes=N, chat_id=chat_id)` |
+| `/schedules` or `show schedules` | `bridge_schedule_list()` |
+| `/unschedule <name>` | `bridge_schedule_remove(name)` |
+| `/schedule-pause <name>` | `bridge_schedule_pause(name)` |
+| `/schedule-resume <name>` | `bridge_schedule_resume(name)` |
 | `/help` | Reply with command list |
 
 ## Routing Context — CRITICAL for Multi-User
