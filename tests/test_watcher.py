@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from claude_bridge.db import BridgeDB
+from claude_bridge.message_db import MessageDB
 from claude_bridge.watcher import watch
 
 
@@ -136,3 +137,82 @@ class TestWatcherReporting:
 def _run_watch(db: BridgeDB, timeout_minutes: int = 30):
     """Run the watch function with an injected db."""
     watch(timeout_minutes=timeout_minutes, db=db)
+
+
+class TestWatcherInstanceScoping:
+    def test_get_running_tasks_only_returns_tasks_with_known_agents(self, db):
+        """get_running_tasks() joins with agents — only tasks with registered agents are returned."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        tid = db.create_task("backend--api", "work")
+        db.update_task(tid, status="running", pid=11111,
+                       started_at=datetime.now(timezone.utc).isoformat())
+        db.update_agent_state("backend--api", "running")
+
+        running = db.get_running_tasks()
+        assert len(running) == 1
+        assert running[0]["session_id"] == "backend--api"
+
+    def test_get_running_tasks_returns_empty_when_no_agents(self, db):
+        """get_running_tasks() on empty agents table returns nothing."""
+        # No agents registered → nothing to return even if tasks existed
+        running = db.get_running_tasks()
+        assert running == []
+
+    @patch("claude_bridge.watcher.pid_alive", return_value=True)
+    def test_watcher_processes_only_registered_agent_tasks(self, mock_alive, db):
+        """Watcher processes tasks whose agents are registered in the current instance DB."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        tid = db.create_task("backend--api", "do work")
+        db.update_task(tid, status="running", pid=22222,
+                       started_at=datetime.now(timezone.utc).isoformat())
+        db.update_agent_state("backend--api", "running")
+
+        _run_watch(db, timeout_minutes=9999)  # Large timeout — no kill
+
+        # pid_alive was checked for the registered agent's task
+        mock_alive.assert_called_once_with(22222)
+
+
+class TestWatcherNoDuplicateOutbound:
+    @patch("claude_bridge.watcher.pid_alive", return_value=False)
+    def test_no_duplicate_outbound_on_second_watcher_run(self, mock_alive, db, tmp_path):
+        """Running watcher twice on the same unreported task must create only one outbound."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        tid = db.create_task("backend--api", "fix bug", channel="telegram", channel_chat_id="999")
+        result_file = str(tmp_path / f"task-{tid}-result.json")
+        with open(result_file, "w") as f:
+            json.dump({"is_error": False, "result": "done", "total_cost_usd": 0.01,
+                       "duration_ms": 5000, "num_turns": 2}, f)
+        db.update_task(tid, status="running", pid=12345, result_file=result_file,
+                       started_at=datetime.now(timezone.utc).isoformat())
+        db.update_agent_state("backend--api", "running")
+
+        msg_db_path = str(tmp_path / "messages.db")
+
+        # First run: task completes
+        with patch("claude_bridge.watcher.MessageDB", side_effect=lambda: MessageDB(msg_db_path)):
+            _run_watch(db)
+
+        task = db.get_task(tid)
+        assert task["reported"] == 1
+
+        db1 = MessageDB(msg_db_path)
+        try:
+            first_count = len(db1.get_pending_outbound())
+            assert first_count == 1  # Exactly one outbound created
+        finally:
+            db1.close()
+
+        # Reset reported flag to simulate watcher re-running before mark_task_reported
+        db.conn.execute("UPDATE tasks SET reported = 0 WHERE id = ?", (tid,))
+        db.conn.commit()
+
+        # Second run — outbound already exists so should NOT create another
+        with patch("claude_bridge.watcher.MessageDB", side_effect=lambda: MessageDB(msg_db_path)):
+            _run_watch(db)
+
+        db2 = MessageDB(msg_db_path)
+        try:
+            assert len(db2.get_pending_outbound()) == first_count
+        finally:
+            db2.close()

@@ -390,8 +390,11 @@ class BridgeDB:
         ).fetchone()
 
     def get_running_tasks(self) -> list[sqlite3.Row]:
+        """Return running tasks scoped to agents registered in this instance's DB."""
         return self.conn.execute(
-            "SELECT * FROM tasks WHERE status = 'running'"
+            """SELECT t.* FROM tasks t
+               JOIN agents a ON t.session_id = a.session_id
+               WHERE t.status = 'running'"""
         ).fetchall()
 
     def get_unreported_tasks(self) -> list[sqlite3.Row]:

@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from datetime import datetime, timezone
 
 # Add parent to path so we can import from the package
@@ -23,19 +24,36 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from claude_bridge.db import BridgeDB
 
 
-def parse_result_file(result_file: str) -> dict | None:
-    """Parse the JSON result file from claude --output-format json."""
-    try:
-        expanded = os.path.expanduser(result_file)
-        if not os.path.isfile(expanded):
-            return None
-        with open(expanded) as f:
-            content = f.read().strip()
+def parse_result_file(result_file: str, retries: int = 0, delay: float = 1.0) -> dict | None:
+    """Parse the JSON result file from claude --output-format json.
+
+    Args:
+        result_file: Path to the JSON result file.
+        retries: Number of additional attempts if file is missing or empty.
+        delay: Seconds to wait between attempts.
+    """
+    expanded = os.path.expanduser(result_file)
+    for attempt in range(retries + 1):
+        try:
+            if not os.path.isfile(expanded):
+                if attempt < retries:
+                    time.sleep(delay)
+                    continue
+                return None
+            with open(expanded) as f:
+                content = f.read().strip()
             if not content:
+                if attempt < retries:
+                    time.sleep(delay)
+                    continue
                 return None
             return json.loads(content)
-    except (json.JSONDecodeError, IOError):
-        return None
+        except (json.JSONDecodeError, IOError):
+            if attempt < retries:
+                time.sleep(delay)
+                continue
+            return None
+    return None
 
 
 def _check_team_aggregation(db: BridgeDB, parent_task_id: int):
@@ -107,7 +125,7 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
         exit_code = 0
         error = None
 
-        result = parse_result_file(result_file) if result_file else None
+        result = parse_result_file(result_file, retries=5, delay=1.0) if result_file else None
 
         if result:
             if result.get("is_error"):
@@ -223,12 +241,14 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
 
             _msg_db = MessageDB(msg_db_path) if msg_db_path else MessageDB()
             try:
-                _msg_db.create_outbound(
-                    updated_task["channel"],
-                    updated_task["channel_chat_id"],
-                    message,
-                    source="notification",
-                )
+                if not _msg_db.has_notification_for_task(task_id):
+                    _msg_db.create_outbound(
+                        updated_task["channel"],
+                        updated_task["channel_chat_id"],
+                        message,
+                        source="notification",
+                        task_id=task_id,
+                    )
             finally:
                 _msg_db.close()
 

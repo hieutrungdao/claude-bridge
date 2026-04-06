@@ -12,10 +12,70 @@ from datetime import datetime, timezone
 
 from .db import BridgeDB
 from .dispatcher import pid_alive, kill_process, spawn_task, get_result_file
+from .message_db import MessageDB
 from .session import derive_agent_file_name
 
 
 DEFAULT_TIMEOUT_MINUTES = 360
+
+
+def _repair_incomplete_done_tasks(db: BridgeDB) -> None:
+    """Re-parse result files for done tasks that have no summary/cost data.
+
+    Handles the race condition where the stop hook fires before the result
+    JSON file is fully written. The watcher runs later and can recover the data.
+    """
+    from .on_complete import parse_result_file
+    from .notify import format_completion_message
+
+    incomplete = db.conn.execute(
+        """SELECT t.*, a.name as agent_name
+           FROM tasks t JOIN agents a ON t.session_id = a.session_id
+           WHERE t.status = 'done'
+             AND t.result_summary IS NULL
+             AND t.result_file IS NOT NULL
+             AND t.reported = 1"""
+    ).fetchall()
+
+    if not incomplete:
+        return
+
+    msg_db = MessageDB()
+    try:
+        for task in incomplete:
+            result = parse_result_file(task["result_file"])
+            if not result or result.get("is_error"):
+                continue
+
+            summary = str(result.get("result", ""))[:500]
+            cost = result.get("total_cost_usd", 0) or 0
+            duration = result.get("duration_ms", 0) or 0
+            turns = result.get("num_turns", 0) or 0
+
+            if not summary and cost == 0:
+                continue  # Still no data — skip
+
+            db.update_task(
+                task["id"],
+                result_summary=summary if summary else None,
+                cost_usd=cost,
+                duration_ms=duration,
+                num_turns=turns,
+            )
+            print(f"[watcher] Repaired task #{task['id']} ({task['session_id']}) — recovered result data from file")
+
+            # Send a follow-up notification with the real data
+            if task["channel"] != "cli" and task["channel_chat_id"]:
+                if not msg_db.has_notification_for_task(task["id"]):
+                    updated = db.get_task(task["id"])
+                    agent_name = task["agent_name"]
+                    message = format_completion_message(updated, agent_name)
+                    msg_db.create_outbound(
+                        task["channel"], task["channel_chat_id"],
+                        message, source="notification", task_id=task["id"],
+                    )
+    finally:
+        msg_db.close()
 
 
 def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = None):
@@ -112,9 +172,11 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                     db.update_agent_state(session_id, "idle")
                     print(f"[watcher] Task #{task_id} ({session_id}) timed out after {timeout_minutes}m")
 
+        # Re-parse done tasks that were reported with missing result data (race condition recovery)
+        _repair_incomplete_done_tasks(db)
+
         # Report unreported completions + queue notifications
         from .notify import format_completion_message
-        from .message_db import MessageDB
 
         msg_db = MessageDB()
         try:
@@ -131,15 +193,16 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                 elif task["status"] == "timeout":
                     print(f"⏱ Task #{task['id']} ({task['session_id']}) — timed out")
 
-                # Queue notification via outbound messages
+                # Queue notification via outbound messages (dedup: skip if already queued)
                 if task["channel"] != "cli" and task["channel_chat_id"]:
-                    agent = db.get_agent_by_session(task["session_id"])
-                    agent_name = agent["name"] if agent else task["session_id"]
-                    message = format_completion_message(task, agent_name)
-                    msg_db.create_outbound(
-                        task["channel"], task["channel_chat_id"],
-                        message, source="notification",
-                    )
+                    if not msg_db.has_notification_for_task(task["id"]):
+                        agent = db.get_agent_by_session(task["session_id"])
+                        agent_name = agent["name"] if agent else task["session_id"]
+                        message = format_completion_message(task, agent_name)
+                        msg_db.create_outbound(
+                            task["channel"], task["channel_chat_id"],
+                            message, source="notification", task_id=task["id"],
+                        )
 
                 db.mark_task_reported(task["id"])
         finally:

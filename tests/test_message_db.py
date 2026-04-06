@@ -113,6 +113,33 @@ class TestOutboundMessages:
         assert db.get_pending_outbound() == []
 
 
+class TestOutboundDeduplication:
+    def test_has_notification_false_when_empty(self, db):
+        assert db.has_notification_for_task(42) is False
+
+    def test_has_notification_true_after_create(self, db):
+        db.create_outbound("telegram", "111", "done", source="notification", task_id=7)
+        assert db.has_notification_for_task(7) is True
+
+    def test_has_notification_only_matches_notification_source(self, db):
+        db.create_outbound("telegram", "111", "done", source="bot", task_id=9)
+        assert db.has_notification_for_task(9) is False
+
+    def test_has_notification_false_for_other_task_id(self, db):
+        db.create_outbound("telegram", "111", "done", source="notification", task_id=1)
+        assert db.has_notification_for_task(2) is False
+
+    def test_task_id_persisted_in_outbound_row(self, db):
+        mid = db.create_outbound("telegram", "222", "hello", source="notification", task_id=99)
+        msg = db.get_outbound(mid)
+        assert msg["task_id"] == 99
+
+    def test_create_outbound_without_task_id(self, db):
+        mid = db.create_outbound("telegram", "333", "hi")
+        msg = db.get_outbound(mid)
+        assert msg["task_id"] is None
+
+
 class TestPollerState:
     def test_set_and_get(self, db):
         db.set_state("telegram_offset", "12345")

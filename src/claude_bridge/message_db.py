@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS outbound_messages (
     retry_count INTEGER DEFAULT 0,
     max_retries INTEGER DEFAULT 3,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    sent_at TIMESTAMP
+    sent_at TIMESTAMP,
+    task_id INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS poller_state (
@@ -85,6 +86,12 @@ class MessageDB:
         self.conn.execute("PRAGMA foreign_keys = ON")
         self.conn.executescript(SCHEMA)
         self.conn.commit()
+        # Migrate: add task_id column if not present (for existing DBs)
+        try:
+            self.conn.execute("ALTER TABLE outbound_messages ADD COLUMN task_id INTEGER")
+            self.conn.commit()
+        except sqlite3.OperationalError:
+            pass  # Column already exists
 
     def close(self):
         self.conn.close()
@@ -159,14 +166,23 @@ class MessageDB:
     def create_outbound(
         self, platform: str, chat_id: str, message_text: str,
         reply_to_message_id: str | None = None, source: str = "bot",
+        task_id: int | None = None,
     ) -> int:
         """Create a pending outbound message."""
         cursor = self.conn.execute(
-            "INSERT INTO outbound_messages (platform, chat_id, message_text, reply_to_message_id, source) VALUES (?, ?, ?, ?, ?)",
-            (platform, chat_id, message_text, reply_to_message_id, source),
+            "INSERT INTO outbound_messages (platform, chat_id, message_text, reply_to_message_id, source, task_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (platform, chat_id, message_text, reply_to_message_id, source, task_id),
         )
         self.conn.commit()
         return cursor.lastrowid
+
+    def has_notification_for_task(self, task_id: int) -> bool:
+        """Return True if a notification outbound already exists for this task."""
+        row = self.conn.execute(
+            "SELECT 1 FROM outbound_messages WHERE task_id = ? AND source = 'notification' LIMIT 1",
+            (task_id,),
+        ).fetchone()
+        return row is not None
 
     def get_outbound(self, msg_id: int) -> sqlite3.Row | None:
         return self.conn.execute(
