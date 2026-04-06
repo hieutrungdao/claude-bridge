@@ -53,9 +53,9 @@ def derive_session_id(agent_name: str, project_dir: str) -> str:
 def derive_agent_file_name(session_id: str) -> str:
     """Derive the native Claude Code agent .md filename (slug only, no path/extension).
 
-    Includes an instance prefix when CLAUDE_BRIDGE_HOME is non-default so
-    that multiple bridge instances sharing the same ~/.claude/agents/ directory
-    don't overwrite each other's agent files.
+    Always returns "bridge--{session_id}" — isolation across instances is achieved
+    by writing to each instance's bot_dir/.claude/agents/ rather than a shared
+    global directory.
 
     Naming convention:
     - agent_file_name / agent_slug: just the name, e.g. "bridge--backend--my-api"
@@ -63,14 +63,9 @@ def derive_agent_file_name(session_id: str) -> str:
     - db.agents.agent_file column: stores the full path (agent_md_path)
     Use get_agent_file_path(session_id) for the full path.
 
-    Examples (default home):
+    Example:
         backend--my-api → "bridge--backend--my-api"
-    Examples (prod home ~/.claude-bridge-prod):
-        backend--my-api → "bridge--prod--backend--my-api"
     """
-    prefix = get_instance_prefix()
-    if prefix:
-        return f"bridge--{prefix}--{session_id}"
     return f"bridge--{session_id}"
 
 
@@ -106,9 +101,15 @@ def get_tasks_dir(session_id: str) -> str:
     return os.path.join(get_workspace_dir(session_id), "tasks")
 
 
-def get_agent_file_path(session_id: str) -> str:
-    """Get the full path to the agent .md file in ~/.claude/agents/."""
+def get_agent_file_path(session_id: str, bot_dir: str | None = None) -> str:
+    """Get the full path to the agent .md file.
+
+    When bot_dir is provided, returns {bot_dir}/.claude/agents/{name}.md.
+    Otherwise falls back to the global ~/.claude/agents/{name}.md.
+    """
     name = derive_agent_file_name(session_id)
+    if bot_dir:
+        return os.path.join(bot_dir, ".claude", "agents", f"{name}.md")
     return os.path.join(os.path.expanduser("~/.claude/agents"), f"{name}.md")
 
 

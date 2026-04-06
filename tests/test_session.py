@@ -71,13 +71,15 @@ class TestDeriveAgentFileName:
         monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
         assert derive_agent_file_name("backend--my-api") == "bridge--backend--my-api"
 
-    def test_with_instance_prefix(self, tmp_path, monkeypatch):
+    def test_no_instance_prefix_with_custom_home(self, tmp_path, monkeypatch):
+        """derive_agent_file_name never adds instance prefix — isolation is via bot_dir."""
         custom = tmp_path / ".claude-bridge-prod"
         custom.mkdir()
         monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
-        assert derive_agent_file_name("backend--my-api") == "bridge--prod--backend--my-api"
+        assert derive_agent_file_name("backend--my-api") == "bridge--backend--my-api"
 
-    def test_different_instances_no_conflict(self, tmp_path, monkeypatch):
+    def test_consistent_across_instances(self, tmp_path, monkeypatch):
+        """Same session_id produces same file name regardless of CLAUDE_BRIDGE_HOME."""
         prod = tmp_path / ".claude-bridge-prod"
         prod.mkdir()
         monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(prod))
@@ -88,7 +90,7 @@ class TestDeriveAgentFileName:
         monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(staging))
         name_staging = derive_agent_file_name("backend--api")
 
-        assert name_prod != name_staging
+        assert name_prod == name_staging == "bridge--backend--api"
 
 
 class TestValidateAgentName:
@@ -135,12 +137,13 @@ class TestPathHelpers:
         assert "agents/bridge--backend--my-api.md" in path
         assert path.startswith("/")
 
-    def test_get_agent_file_path_with_instance_prefix(self, tmp_path, monkeypatch):
-        custom = tmp_path / ".claude-bridge-prod"
-        custom.mkdir()
-        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
-        path = get_agent_file_path("backend--my-api")
-        assert "agents/bridge--prod--backend--my-api.md" in path
+    def test_get_agent_file_path_with_bot_dir(self, tmp_path):
+        """get_agent_file_path uses bot_dir/.claude/agents/ when bot_dir is provided."""
+        bot_dir = str(tmp_path / "bridge-bot")
+        path = get_agent_file_path("backend--my-api", bot_dir=bot_dir)
+        import os
+        expected = os.path.join(bot_dir, ".claude", "agents", "bridge--backend--my-api.md")
+        assert path == expected
 
 
 class TestCreateWorkspace:

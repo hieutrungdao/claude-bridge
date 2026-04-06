@@ -65,10 +65,17 @@ def generate_agent_md(
     ).lstrip()
 
 
-def write_agent_md(session_id: str, content: str) -> str:
-    """Write agent .md file to ~/.claude/agents/. Returns the file path."""
+def write_agent_md(session_id: str, content: str, bot_dir: str | None = None) -> str:
+    """Write agent .md file. Returns the file path.
+
+    When bot_dir is provided, writes to {bot_dir}/.claude/agents/ (project-level,
+    isolated per bridge instance). Otherwise falls back to ~/.claude/agents/ (global).
+    """
     agent_file_name = derive_agent_file_name(session_id)
-    agents_dir = os.path.expanduser("~/.claude/agents")
+    if bot_dir:
+        agents_dir = os.path.join(bot_dir, ".claude", "agents")
+    else:
+        agents_dir = os.path.expanduser("~/.claude/agents")
     os.makedirs(agents_dir, exist_ok=True)
 
     file_path = os.path.join(agents_dir, f"{agent_file_name}.md")
@@ -134,11 +141,20 @@ def install_stop_hook(project_dir: str, session_id: str) -> str:
     return settings_path
 
 
-def delete_agent_md(session_id: str) -> bool:
-    """Delete agent .md file. Returns True if file existed."""
+def delete_agent_md(session_id: str, bot_dir: str | None = None) -> bool:
+    """Delete agent .md file. Returns True if file was found and deleted.
+
+    Searches bot_dir/.claude/agents/ first (when bot_dir is provided), then
+    falls back to ~/.claude/agents/ for backward compatibility.
+    """
     agent_file_name = derive_agent_file_name(session_id)
-    file_path = os.path.join(os.path.expanduser("~/.claude/agents"), f"{agent_file_name}.md")
-    if os.path.isfile(file_path):
-        os.remove(file_path)
-        return True
+    candidates = []
+    if bot_dir:
+        candidates.append(os.path.join(bot_dir, ".claude", "agents", f"{agent_file_name}.md"))
+    candidates.append(os.path.join(os.path.expanduser("~/.claude/agents"), f"{agent_file_name}.md"))
+
+    for file_path in candidates:
+        if os.path.isfile(file_path):
+            os.remove(file_path)
+            return True
     return False

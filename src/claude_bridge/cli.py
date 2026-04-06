@@ -421,8 +421,9 @@ def cmd_delete_agent(db: BridgeDB, args):
         )
         return 1
 
-    # Clean up
-    delete_agent_md(session_id)
+    # Clean up — use bot_dir from config to find project-level agent file
+    bot_dir = load_config().get("bot_dir")
+    delete_agent_md(session_id, bot_dir=bot_dir)
     cleanup_workspace(session_id)
     db.delete_agent(args.name)
 

@@ -11,15 +11,24 @@ from datetime import datetime
 
 from .db import BridgeDB
 from .message_db import MessageDB
-from .session import derive_session_id, derive_agent_file_name
+from .session import derive_session_id
 from .agent_md import generate_agent_md, write_agent_md, install_stop_hook
 from .claude_md_init import init_claude_md
 from .dispatcher import spawn_task, get_result_file, kill_process
 from .session import create_workspace
 
 
-def _agent_file_name(session_id: str) -> str:
-    return derive_agent_file_name(session_id)
+def _get_bridge_config() -> dict:
+    """Read bridge config.json. Returns empty dict if missing or invalid."""
+    from . import get_bridge_home
+    config_path = get_bridge_home() / "config.json"
+    if config_path.is_file():
+        try:
+            with open(config_path) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
 
 
 def tool_agents(db: BridgeDB) -> str:
@@ -113,7 +122,8 @@ def tool_dispatch(
     # Create and spawn
     task_id = db.create_task(session_id, prompt, channel=channel, channel_chat_id=chat_id, user_id=user_id)
     result_file = get_result_file(session_id, task_id)
-    agent_file_name = _agent_file_name(session_id)
+    # Use stored agent_file path from DB (set at create-agent time with correct bot_dir)
+    agent_file_name = a["agent_file"] or a["session_id"]
     task_model = model or a["model"]
 
     pid = spawn_task(agent_file_name, session_id, a["project_dir"], prompt, task_id, model=task_model)
@@ -179,9 +189,10 @@ def tool_create_agent(
 
     session_id = derive_session_id(name, project_dir)
 
-    # Generate agent .md
+    # Generate agent .md — write to bot_dir/.claude/agents/ when configured
+    bot_dir = _get_bridge_config().get("bot_dir")
     content = generate_agent_md(session_id, name, project_dir, purpose, model=model)
-    agent_file_path = write_agent_md(session_id, content)
+    agent_file_path = write_agent_md(session_id, content, bot_dir=bot_dir)
 
     # Install stop hook
     install_stop_hook(project_dir, session_id)

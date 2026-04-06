@@ -82,63 +82,66 @@ class TestGenerateAgentMd:
         assert ".claude-bridge" in hook_cmd
 
 
-class TestInstancePrefixInAgentMd:
-    def test_generate_uses_instance_prefix(self, tmp_path, monkeypatch):
-        """generate_agent_md embeds instance-prefixed name when home is non-default."""
+class TestBotDirAgentMd:
+    def test_generate_no_instance_prefix(self, monkeypatch):
+        """generate_agent_md always uses plain bridge-- prefix regardless of CLAUDE_BRIDGE_HOME."""
+        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
+        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        assert "name: bridge--backend--api" in content
+
+    def test_generate_no_prefix_with_custom_home(self, tmp_path, monkeypatch):
+        """generate_agent_md does not embed instance prefix — isolation is via bot_dir."""
         custom = tmp_path / ".claude-bridge-prod"
         custom.mkdir()
         monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
-        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
-        assert "name: bridge--prod--backend--api" in content
-
-    def test_generate_no_prefix_for_default_home(self, monkeypatch):
-        """generate_agent_md uses plain bridge-- prefix for default home."""
-        monkeypatch.delenv("CLAUDE_BRIDGE_HOME", raising=False)
         content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
         assert "name: bridge--backend--api" in content
         assert "bridge--prod" not in content
 
-    def test_write_uses_instance_prefix_in_filename(self, tmp_path, monkeypatch):
-        """write_agent_md writes file with instance-prefixed name."""
-        custom = tmp_path / ".claude-bridge-prod"
-        custom.mkdir()
-        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
-        monkeypatch.setenv("HOME", str(tmp_path))
-        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
-        path = write_agent_md("backend--api", content)
-        assert path.endswith("bridge--prod--backend--api.md")
+    def test_write_to_bot_dir(self, tmp_path):
+        """write_agent_md writes to bot_dir/.claude/agents/ when bot_dir is provided."""
+        bot_dir = str(tmp_path / "bridge-bot")
+        content = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        path = write_agent_md("backend--api", content, bot_dir=bot_dir)
+        expected = os.path.join(bot_dir, ".claude", "agents", "bridge--backend--api.md")
+        assert path == expected
         assert os.path.isfile(path)
 
-    def test_delete_removes_instance_prefixed_file(self, tmp_path, monkeypatch):
-        """delete_agent_md removes the correct instance-prefixed file."""
-        custom = tmp_path / ".claude-bridge-prod"
-        custom.mkdir()
-        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(custom))
+    def test_write_fallback_to_global(self, tmp_path, monkeypatch):
+        """write_agent_md falls back to ~/.claude/agents/ when no bot_dir."""
         monkeypatch.setenv("HOME", str(tmp_path))
-        content = generate_agent_md("backend--api", "backend", "/projects/api", "API dev")
+        content = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        path = write_agent_md("backend--api", content)
+        assert path.endswith("bridge--backend--api.md")
+        assert ".claude/agents/" in path
+        assert os.path.isfile(path)
+
+    def test_delete_from_bot_dir(self, tmp_path):
+        """delete_agent_md removes file from bot_dir when provided."""
+        bot_dir = str(tmp_path / "bridge-bot")
+        content = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        write_agent_md("backend--api", content, bot_dir=bot_dir)
+        assert delete_agent_md("backend--api", bot_dir=bot_dir) is True
+        agents_dir = os.path.join(bot_dir, ".claude", "agents")
+        assert not os.path.isfile(os.path.join(agents_dir, "bridge--backend--api.md"))
+
+    def test_delete_fallback_to_global(self, tmp_path, monkeypatch):
+        """delete_agent_md falls back to ~/.claude/agents/ when file not in bot_dir."""
+        monkeypatch.setenv("HOME", str(tmp_path))
+        bot_dir = str(tmp_path / "bridge-bot")
+        content = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        # Write to global, not bot_dir
         write_agent_md("backend--api", content)
-        assert delete_agent_md("backend--api") is True
-        # File should be gone
-        agents_dir = os.path.join(str(tmp_path), ".claude", "agents")
-        assert not os.path.isfile(os.path.join(agents_dir, "bridge--prod--backend--api.md"))
+        # Delete with bot_dir set — should find file in global fallback
+        assert delete_agent_md("backend--api", bot_dir=bot_dir) is True
 
-    def test_two_instances_different_files(self, tmp_path, monkeypatch):
-        """Two instances create non-conflicting agent files."""
-        prod = tmp_path / ".claude-bridge-prod"
-        prod.mkdir()
-        staging = tmp_path / ".claude-bridge-staging"
-        staging.mkdir()
-
-        monkeypatch.setenv("HOME", str(tmp_path))
-
-        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(prod))
-        content_prod = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
-        path_prod = write_agent_md("backend--api", content_prod)
-
-        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(staging))
-        content_staging = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
-        path_staging = write_agent_md("backend--api", content_staging)
-
-        assert path_prod != path_staging
-        assert os.path.isfile(path_prod)
-        assert os.path.isfile(path_staging)
+    def test_two_instances_different_bot_dirs(self, tmp_path):
+        """Two instances with different bot_dirs create isolated agent files."""
+        bot_dir1 = str(tmp_path / "bridge-bot-1")
+        bot_dir2 = str(tmp_path / "bridge-bot-2")
+        content = generate_agent_md("backend--api", "backend", "/p/api", "API dev")
+        path1 = write_agent_md("backend--api", content, bot_dir=bot_dir1)
+        path2 = write_agent_md("backend--api", content, bot_dir=bot_dir2)
+        assert path1 != path2
+        assert os.path.isfile(path1)
+        assert os.path.isfile(path2)
