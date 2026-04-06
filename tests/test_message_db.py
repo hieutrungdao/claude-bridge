@@ -140,6 +140,48 @@ class TestOutboundDeduplication:
         assert msg["task_id"] is None
 
 
+class TestUpdatePendingOutbound:
+    def test_updates_pending_notification(self, db):
+        """Pending notification message_text is updated with new content."""
+        mid = db.create_outbound("telegram", "111", "Task done (no summary)", source="notification", task_id=5)
+        updated = db.update_pending_outbound_for_task(5, "Task done\nActual summary here")
+        assert updated is True
+        msg = db.get_outbound(mid)
+        assert msg["message_text"] == "Task done\nActual summary here"
+        assert msg["status"] == "pending"
+
+    def test_resets_notified_to_pending(self, db):
+        """'notified' status is reset to 'pending' after update so processOutbound re-sends it."""
+        mid = db.create_outbound("telegram", "111", "old text", source="notification", task_id=10)
+        db.conn.execute("UPDATE outbound_messages SET status = 'notified' WHERE id = ?", (mid,))
+        db.conn.commit()
+        updated = db.update_pending_outbound_for_task(10, "new text with summary")
+        assert updated is True
+        msg = db.get_outbound(mid)
+        assert msg["message_text"] == "new text with summary"
+        assert msg["status"] == "pending"
+
+    def test_returns_false_when_already_sent(self, db):
+        """Already sent notification cannot be updated — returns False."""
+        mid = db.create_outbound("telegram", "111", "Task done", source="notification", task_id=6)
+        db.mark_outbound_sent(mid)
+        updated = db.update_pending_outbound_for_task(6, "Updated message")
+        assert updated is False
+
+    def test_returns_false_when_no_notification(self, db):
+        """No notification for task — returns False."""
+        updated = db.update_pending_outbound_for_task(99, "anything")
+        assert updated is False
+
+    def test_only_matches_notification_source(self, db):
+        """Does not update outbound with a different source (e.g. 'bot')."""
+        mid = db.create_outbound("telegram", "111", "bot reply", source="bot", task_id=20)
+        updated = db.update_pending_outbound_for_task(20, "new text", source="notification")
+        assert updated is False
+        msg = db.get_outbound(mid)
+        assert msg["message_text"] == "bot reply"  # unchanged
+
+
 class TestPollerState:
     def test_set_and_get(self, db):
         db.set_state("telegram_offset", "12345")

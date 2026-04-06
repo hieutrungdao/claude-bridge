@@ -66,10 +66,11 @@ def _repair_incomplete_done_tasks(db: BridgeDB) -> None:
 
             # Send a follow-up notification with the real data
             if task["channel"] != "cli" and task["channel_chat_id"]:
-                if not msg_db.has_notification_for_task(task["id"]):
-                    updated = db.get_task(task["id"])
-                    agent_name = task["agent_name"]
-                    message = format_completion_message(updated, agent_name)
+                updated = db.get_task(task["id"])
+                agent_name = task["agent_name"]
+                message = format_completion_message(updated, agent_name)
+                # Update pending notification if not yet sent, otherwise create new one
+                if not msg_db.update_pending_outbound_for_task(task["id"], message):
                     msg_db.create_outbound(
                         task["channel"], task["channel_chat_id"],
                         message, source="notification", task_id=task["id"],

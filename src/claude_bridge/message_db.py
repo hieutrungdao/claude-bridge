@@ -184,6 +184,30 @@ class MessageDB:
         ).fetchone()
         return row is not None
 
+    def update_pending_outbound_for_task(
+        self, task_id: int, message_text: str, source: str = "notification"
+    ) -> bool:
+        """Update message_text of an unsent outbound notification for a task.
+
+        Finds a pending or notified outbound for this task and updates its message_text,
+        resetting status to 'pending' so it gets re-sent with the new content.
+
+        Returns True if an existing pending/notified outbound was updated.
+        Returns False if no pending outbound exists (already sent or not yet created).
+        """
+        row = self.conn.execute(
+            "SELECT id FROM outbound_messages WHERE task_id = ? AND source = ? AND status IN ('pending', 'notified') LIMIT 1",
+            (task_id, source),
+        ).fetchone()
+        if not row:
+            return False
+        self.conn.execute(
+            "UPDATE outbound_messages SET message_text = ?, status = 'pending' WHERE id = ?",
+            (message_text, row["id"]),
+        )
+        self.conn.commit()
+        return True
+
     def get_outbound(self, msg_id: int) -> sqlite3.Row | None:
         return self.conn.execute(
             "SELECT * FROM outbound_messages WHERE id = ?", (msg_id,)

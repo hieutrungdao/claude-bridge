@@ -216,3 +216,107 @@ class TestWatcherNoDuplicateOutbound:
             assert len(db2.get_pending_outbound()) == first_count
         finally:
             db2.close()
+
+
+class TestRepairIncompleteDoneTasks:
+    """Tests for _repair_incomplete_done_tasks — race condition recovery for missing summaries."""
+
+    def test_repair_updates_pending_notification_with_summary(self, db, tmp_path):
+        """Pending notification (no summary) is updated with summary when watcher repairs task."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        result_file = str(tmp_path / "task-result.json")
+        with open(result_file, "w") as f:
+            json.dump({"is_error": False, "result": "Stock market up 2% today",
+                       "total_cost_usd": 0.05, "duration_ms": 60000, "num_turns": 4}, f)
+
+        # Task completed (hook fired) but result_summary was empty at notification time
+        tid = db.create_task("backend--api", "run news", channel="telegram", channel_chat_id="999")
+        db.update_task(tid, status="done", result_file=result_file,
+                       result_summary=None, reported=1,
+                       completed_at=datetime.now(timezone.utc).isoformat())
+
+        msg_db_path = str(tmp_path / "messages.db")
+        msg_db = MessageDB(msg_db_path)
+        try:
+            # Simulate: original notification was created WITHOUT summary
+            original_text = "✓ Task #1 (backend) — done in 1m 0s\nCost: $0.000"
+            msg_db.create_outbound("telegram", "999", original_text, source="notification", task_id=tid)
+        finally:
+            msg_db.close()
+
+        # Watcher repair runs
+        with patch("claude_bridge.watcher.MessageDB", side_effect=lambda: MessageDB(msg_db_path)):
+            _run_watch(db)
+
+        # Pending notification should now include the summary
+        msg_db2 = MessageDB(msg_db_path)
+        try:
+            pending = msg_db2.get_pending_outbound()
+            assert len(pending) == 1  # Still exactly one outbound (updated, not duplicated)
+            assert "Stock market up 2% today" in pending[0]["message_text"]
+        finally:
+            msg_db2.close()
+
+    def test_repair_creates_new_notification_when_original_already_sent(self, db, tmp_path):
+        """New notification is created when original was already sent (processOutbound already ran)."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        result_file = str(tmp_path / "task-result.json")
+        with open(result_file, "w") as f:
+            json.dump({"is_error": False, "result": "Fixed 3 bugs",
+                       "total_cost_usd": 0.03, "duration_ms": 30000, "num_turns": 2}, f)
+
+        tid = db.create_task("backend--api", "fix bugs", channel="telegram", channel_chat_id="888")
+        db.update_task(tid, status="done", result_file=result_file,
+                       result_summary=None, reported=1,
+                       completed_at=datetime.now(timezone.utc).isoformat())
+
+        msg_db_path = str(tmp_path / "messages.db")
+        msg_db = MessageDB(msg_db_path)
+        try:
+            # Simulate: original notification was already sent (no summary)
+            mid = msg_db.create_outbound("telegram", "888", "✓ Task done (no summary)",
+                                         source="notification", task_id=tid)
+            msg_db.mark_outbound_sent(mid)
+        finally:
+            msg_db.close()
+
+        # Watcher repair runs
+        with patch("claude_bridge.watcher.MessageDB", side_effect=lambda: MessageDB(msg_db_path)):
+            _run_watch(db)
+
+        # A NEW notification should be created with the summary
+        msg_db2 = MessageDB(msg_db_path)
+        try:
+            all_outbound = msg_db2.conn.execute(
+                "SELECT * FROM outbound_messages ORDER BY id"
+            ).fetchall()
+            assert len(all_outbound) == 2  # Original sent + new follow-up
+            new_msg = all_outbound[1]
+            assert "Fixed 3 bugs" in new_msg["message_text"]
+            assert new_msg["status"] == "pending"
+        finally:
+            msg_db2.close()
+
+    def test_repair_skips_cli_channel_tasks(self, db, tmp_path):
+        """Tasks with channel='cli' do not get outbound notifications."""
+        db.create_agent("backend", "/p/api", "backend--api", "/a.md", "dev")
+        result_file = str(tmp_path / "task-result.json")
+        with open(result_file, "w") as f:
+            json.dump({"is_error": False, "result": "Some result",
+                       "total_cost_usd": 0.01, "duration_ms": 5000, "num_turns": 1}, f)
+
+        # CLI task — no notification needed
+        tid = db.create_task("backend--api", "cli task")  # channel defaults to 'cli'
+        db.update_task(tid, status="done", result_file=result_file,
+                       result_summary=None, reported=1,
+                       completed_at=datetime.now(timezone.utc).isoformat())
+
+        msg_db_path = str(tmp_path / "messages.db")
+        with patch("claude_bridge.watcher.MessageDB", side_effect=lambda: MessageDB(msg_db_path)):
+            _run_watch(db)
+
+        msg_db = MessageDB(msg_db_path)
+        try:
+            assert msg_db.get_pending_outbound() == []
+        finally:
+            msg_db.close()
