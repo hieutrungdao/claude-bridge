@@ -19,6 +19,7 @@ def wizard_env(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(home))
     bridge_home = home / ".claude-bridge"
     bridge_home.mkdir()
+    monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
     db = BridgeDB(str(bridge_home / "bridge.db"))
     return {"db": db, "home": home, "bridge_home": bridge_home, "tmp": tmp_path}
 

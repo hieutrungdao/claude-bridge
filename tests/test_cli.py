@@ -45,6 +45,7 @@ def cli_env(tmp_path, monkeypatch):
     # Create bridge dir
     bridge_dir = home / ".claude-bridge"
     bridge_dir.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_dir))
 
     return {
         "home": home,
