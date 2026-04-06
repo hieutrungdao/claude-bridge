@@ -1145,6 +1145,152 @@ class TestCronLineEnv:
         assert "claude_bridge.watcher" in line
 
 
+class TestCronMarkers:
+    """Cron markers must be instance-scoped to prevent cross-instance collisions."""
+
+    def test_default_instance_markers(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", "/home/user/.claude-bridge")
+        from claude_bridge.cli import _get_cron_markers
+        watcher, scheduler = _get_cron_markers()
+        assert watcher == "# claude-bridge-watcher"
+        assert scheduler == "# claude-bridge-scheduler"
+
+    def test_tam_instance_markers(self, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", "/home/user/.claude-bridge-tam")
+        from claude_bridge.cli import _get_cron_markers
+        watcher, scheduler = _get_cron_markers()
+        assert watcher == "# claude-bridge-tam-watcher"
+        assert scheduler == "# claude-bridge-tam-scheduler"
+
+    def test_markers_differ_between_instances(self, monkeypatch):
+        from claude_bridge.cli import _get_cron_markers
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", "/home/user/.claude-bridge")
+        main_watcher, main_sched = _get_cron_markers()
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", "/home/user/.claude-bridge-tam")
+        tam_watcher, tam_sched = _get_cron_markers()
+        assert main_watcher != tam_watcher
+        assert main_sched != tam_sched
+
+    def test_setup_cron_uses_instance_marker(self, tmp_path, monkeypatch):
+        """setup-cron must check only its own instance's marker, not other instances'."""
+        bridge_home = tmp_path / ".claude-bridge-tam"
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+
+        # Existing crontab already has the MAIN instance's entries
+        existing = (
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge bridge-cli watcher >> /dev/null 2>&1 # claude-bridge-watcher\n"
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge bridge-cli scheduler >> /dev/null 2>&1 # claude-bridge-scheduler\n"
+        )
+
+        added_crontab = []
+
+        def fake_run(cmd, **kwargs):
+            import subprocess
+            m = MagicMock()
+            if cmd == ["crontab", "-l"]:
+                m.returncode = 0
+                m.stdout = existing
+            elif cmd == ["crontab", "-"]:
+                added_crontab.append(kwargs.get("input", ""))
+                m.returncode = 0
+                m.stderr = ""
+            return m
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch("shutil.which", return_value="/usr/bin/bridge-cli"):
+            from claude_bridge.cli import cmd_setup_cron
+            db = MagicMock()
+            args = MagicMock()
+            result = cmd_setup_cron(db, args)
+
+        assert result == 0
+        # Should have added TAM instance lines
+        assert len(added_crontab) == 1
+        assert "claude-bridge-tam-watcher" in added_crontab[0]
+        assert "claude-bridge-tam-scheduler" in added_crontab[0]
+        # Main entries should still be present
+        assert "# claude-bridge-watcher\n" in added_crontab[0]
+
+    def test_remove_cron_only_removes_own_instance(self, tmp_path, monkeypatch):
+        """remove-cron must only remove its own instance's lines."""
+        bridge_home = tmp_path / ".claude-bridge-tam"
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+
+        existing = (
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge bridge-cli watcher >> /dev/null 2>&1 # claude-bridge-watcher\n"
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge bridge-cli scheduler >> /dev/null 2>&1 # claude-bridge-scheduler\n"
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge-tam bridge-cli watcher >> /dev/null 2>&1 # claude-bridge-tam-watcher\n"
+            "* * * * * CLAUDE_BRIDGE_HOME=/home/user/.claude-bridge-tam bridge-cli scheduler >> /dev/null 2>&1 # claude-bridge-tam-scheduler\n"
+        )
+
+        saved_crontab = []
+
+        def fake_run(cmd, **kwargs):
+            m = MagicMock()
+            if cmd == ["crontab", "-l"]:
+                m.returncode = 0
+                m.stdout = existing
+            elif cmd == ["crontab", "-"]:
+                saved_crontab.append(kwargs.get("input", ""))
+                m.returncode = 0
+            return m
+
+        with patch("subprocess.run", side_effect=fake_run):
+            from claude_bridge.cli import cmd_remove_cron
+            db = MagicMock()
+            args = MagicMock()
+            result = cmd_remove_cron(db, args)
+
+        assert result == 0
+        assert len(saved_crontab) == 1
+        final = saved_crontab[0]
+        # Main instance lines preserved
+        assert "# claude-bridge-watcher" in final
+        assert "# claude-bridge-scheduler" in final
+        # TAM instance lines removed
+        assert "# claude-bridge-tam-watcher" not in final
+        assert "# claude-bridge-tam-scheduler" not in final
+
+    def test_two_instances_coexist_in_crontab(self, tmp_path, monkeypatch):
+        """Both instances can be set up independently without conflict."""
+        from pathlib import Path as _Path
+
+        crontab_state = [""]
+
+        def fake_run(cmd, **kwargs):
+            m = MagicMock()
+            if cmd == ["crontab", "-l"]:
+                m.returncode = 0
+                m.stdout = crontab_state[0]
+            elif cmd == ["crontab", "-"]:
+                crontab_state[0] = kwargs.get("input", "")
+                m.returncode = 0
+                m.stderr = ""
+            return m
+
+        with patch("subprocess.run", side_effect=fake_run), \
+             patch("shutil.which", return_value="/usr/bin/bridge-cli"):
+            from claude_bridge.cli import cmd_setup_cron
+            db = MagicMock()
+            args = MagicMock()
+
+            # Setup main instance
+            monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / ".claude-bridge"))
+            result1 = cmd_setup_cron(db, args)
+            assert result1 == 0
+
+            # Setup tam instance
+            monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / ".claude-bridge-tam"))
+            result2 = cmd_setup_cron(db, args)
+            assert result2 == 0
+
+        final = crontab_state[0]
+        assert "# claude-bridge-watcher" in final
+        assert "# claude-bridge-scheduler" in final
+        assert "# claude-bridge-tam-watcher" in final
+        assert "# claude-bridge-tam-scheduler" in final
+
+
 class TestGenerateMcpJsonEnv:
     """CLAUDE_BRIDGE_HOME must appear in .mcp.json env section."""
 

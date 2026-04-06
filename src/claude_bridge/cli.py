@@ -1087,8 +1087,15 @@ def cmd_setup_bot(db: BridgeDB, args):
     return 0
 
 
-CRON_MARKER = "# claude-bridge-watcher"
-CRON_SCHEDULER_MARKER = "# claude-bridge-scheduler"
+def _get_cron_markers() -> tuple[str, str]:
+    """Return instance-scoped cron markers derived from CLAUDE_BRIDGE_HOME.
+
+    ~/.claude-bridge     → (# claude-bridge-watcher, # claude-bridge-scheduler)
+    ~/.claude-bridge-tam → (# claude-bridge-tam-watcher, # claude-bridge-tam-scheduler)
+    """
+    from .daemon import get_service_name
+    service = get_service_name()
+    return f"# {service}-watcher", f"# {service}-scheduler"
 
 
 def _get_cron_line() -> str:
@@ -1098,12 +1105,13 @@ def _get_cron_line() -> str:
     bridge_home = str(_gbh_cron())
     log_path = str(_gbh_cron() / "watcher.log")
     bridge_cli = shutil.which("bridge-cli")
+    cron_marker, _ = _get_cron_markers()
     if bridge_cli:
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} watcher >> {log_path} 2>&1 {CRON_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} watcher >> {log_path} 2>&1 {cron_marker}"
     else:
         src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         python_path = shutil.which("python3") or sys.executable
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {CRON_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {cron_marker}"
 
 
 def _get_scheduler_cron_line() -> str:
@@ -1113,18 +1121,20 @@ def _get_scheduler_cron_line() -> str:
     bridge_home = str(_gbh_cron())
     log_path = str(_gbh_cron() / "scheduler.log")
     bridge_cli = shutil.which("bridge-cli")
+    _, cron_scheduler_marker = _get_cron_markers()
     if bridge_cli:
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} scheduler >> {log_path} 2>&1 {CRON_SCHEDULER_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
     else:
         src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         python_path = shutil.which("python3") or sys.executable
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.cli scheduler >> {log_path} 2>&1 {CRON_SCHEDULER_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.cli scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
 
 
 def cmd_setup_cron(db: BridgeDB, args):
     """Install the watcher and scheduler cron jobs."""
     import subprocess
 
+    cron_marker, cron_scheduler_marker = _get_cron_markers()
     watcher_line = _get_cron_line()
     scheduler_line = _get_scheduler_cron_line()
 
@@ -1137,12 +1147,12 @@ def cmd_setup_cron(db: BridgeDB, args):
         return 1
 
     lines_to_add = []
-    if CRON_MARKER in existing:
+    if cron_marker in existing:
         print("Watcher cron already installed.")
     else:
         lines_to_add.append(watcher_line)
 
-    if CRON_SCHEDULER_MARKER in existing:
+    if cron_scheduler_marker in existing:
         print("Scheduler cron already installed.")
     else:
         lines_to_add.append(scheduler_line)
@@ -1171,6 +1181,8 @@ def cmd_remove_cron(db: BridgeDB, args):
     """Remove the watcher and scheduler cron jobs."""
     import subprocess
 
+    cron_marker, cron_scheduler_marker = _get_cron_markers()
+
     try:
         result = subprocess.run(["crontab", "-l"], capture_output=True, text=True)
         existing = result.stdout if result.returncode == 0 else ""
@@ -1178,13 +1190,13 @@ def cmd_remove_cron(db: BridgeDB, args):
         print("Error: crontab not found.", file=sys.stderr)
         return 1
 
-    if CRON_MARKER not in existing and CRON_SCHEDULER_MARKER not in existing:
+    if cron_marker not in existing and cron_scheduler_marker not in existing:
         print("No bridge cron jobs found.")
         return 0
 
-    # Remove both our lines
+    # Remove only this instance's lines
     lines = [l for l in existing.split("\n")
-             if CRON_MARKER not in l and CRON_SCHEDULER_MARKER not in l]
+             if cron_marker not in l and cron_scheduler_marker not in l]
     new_crontab = "\n".join(lines).strip() + "\n"
     subprocess.run(["crontab", "-"], input=new_crontab, capture_output=True, text=True)
 
