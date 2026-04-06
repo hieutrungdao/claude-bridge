@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 def _default_db_path() -> str:
@@ -133,6 +133,34 @@ CREATE TABLE IF NOT EXISTS loop_iterations (
     status TEXT NOT NULL DEFAULT 'running'
 );
 
+CREATE TABLE IF NOT EXISTS schedules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    agent_name TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+
+    interval_minutes INTEGER,
+    cron_expr TEXT,
+    run_once INTEGER DEFAULT 0,
+
+    enabled INTEGER DEFAULT 1,
+    run_count INTEGER DEFAULT 0,
+    consecutive_errors INTEGER DEFAULT 0,
+    last_run_at TIMESTAMP,
+    next_run_at TIMESTAMP,
+    last_error TEXT,
+
+    channel TEXT DEFAULT 'cli',
+    channel_chat_id TEXT,
+    user_id TEXT,
+
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(name, agent_name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_schedules_next_run ON schedules(next_run_at, enabled);
 CREATE INDEX IF NOT EXISTS idx_loops_status ON loops(status);
 CREATE INDEX IF NOT EXISTS idx_loops_agent ON loops(agent);
 CREATE INDEX IF NOT EXISTS idx_loop_iterations_loop ON loop_iterations(loop_id);
@@ -757,6 +785,167 @@ class BridgeDB:
             (task_id,),
         ).fetchone()
         return dict(row) if row else None
+
+    # --- Schedule operations ---
+
+    def add_schedule(
+        self,
+        name: str,
+        agent_name: str,
+        prompt: str,
+        interval_minutes: int,
+        channel: str = "cli",
+        channel_chat_id: str | None = None,
+        user_id: str | None = None,
+        run_once: bool = False,
+    ) -> int:
+        """Create a new schedule. Returns schedule ID.
+
+        Sets next_run_at = now + interval_minutes.
+        Raises sqlite3.IntegrityError on duplicate (name, agent_name).
+        """
+        next_run_at = (datetime.utcnow() + timedelta(minutes=interval_minutes)).isoformat()
+        cursor = self.conn.execute(
+            """INSERT INTO schedules
+               (name, agent_name, prompt, interval_minutes, channel, channel_chat_id, user_id,
+                run_once, next_run_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (name, agent_name, prompt, interval_minutes, channel, channel_chat_id, user_id,
+             1 if run_once else 0, next_run_at),
+        )
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_schedule_by_name(self, name: str) -> dict | None:
+        """Get a schedule by name. Returns dict or None."""
+        row = self.conn.execute(
+            "SELECT * FROM schedules WHERE name = ?", (name,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_schedule_by_id(self, schedule_id: int) -> dict | None:
+        """Get a schedule by ID. Returns dict or None."""
+        row = self.conn.execute(
+            "SELECT * FROM schedules WHERE id = ?", (schedule_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def get_due_schedules(self, now: datetime) -> list[dict]:
+        """Return all enabled schedules where next_run_at <= now."""
+        rows = self.conn.execute(
+            """SELECT * FROM schedules
+               WHERE enabled = 1 AND next_run_at <= ?
+               ORDER BY next_run_at""",
+            (now.isoformat(),),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def update_schedule_success(self, schedule_id: int, now: datetime) -> None:
+        """Mark schedule as successfully dispatched. Increments run_count, resets errors, computes next_run."""
+        schedule = self.get_schedule_by_id(schedule_id)
+        if not schedule:
+            return
+        interval = schedule["interval_minutes"] or 60
+        next_run_at = (now + timedelta(minutes=interval)).isoformat()
+        # Disable if run_once
+        new_enabled = 0 if schedule["run_once"] else 1
+        self.conn.execute(
+            """UPDATE schedules SET
+               run_count = run_count + 1,
+               consecutive_errors = 0,
+               last_run_at = ?,
+               next_run_at = ?,
+               last_error = NULL,
+               enabled = ?,
+               updated_at = ?
+               WHERE id = ?""",
+            (now.isoformat(), next_run_at, new_enabled, now.isoformat(), schedule_id),
+        )
+        self.conn.commit()
+
+    def update_schedule_error(self, schedule_id: int, error_msg: str) -> None:
+        """Increment consecutive_errors, update last_error, compute backoff next_run. Auto-pause at 5."""
+        schedule = self.get_schedule_by_id(schedule_id)
+        if not schedule:
+            return
+        new_errors = (schedule["consecutive_errors"] or 0) + 1
+        # enabled=0 when 5+ consecutive errors (auto-pause); else keep current value
+        new_enabled = 0 if new_errors >= 5 else schedule["enabled"]
+        now = datetime.utcnow()
+        # Backoff: anchor on last_run_at if available, else now
+        anchor_str = schedule["last_run_at"]
+        if anchor_str:
+            try:
+                anchor = datetime.fromisoformat(anchor_str)
+            except ValueError:
+                anchor = now
+        else:
+            anchor = now
+        interval = schedule["interval_minutes"] or 60
+        backoff = min(2 ** new_errors, 8)
+        next_run_at = (anchor + timedelta(minutes=interval * backoff)).isoformat()
+        self.conn.execute(
+            """UPDATE schedules SET
+               consecutive_errors = ?,
+               last_error = ?,
+               next_run_at = ?,
+               enabled = ?,
+               updated_at = ?
+               WHERE id = ?""",
+            (new_errors, error_msg, next_run_at, new_enabled, now.isoformat(), schedule_id),
+        )
+        self.conn.commit()
+
+    def list_schedules(
+        self,
+        agent_name: str | None = None,
+        include_disabled: bool = False,
+    ) -> list[dict]:
+        """List schedules. By default only enabled. Filter by agent_name if given."""
+        conditions = []
+        params: list = []
+        if not include_disabled:
+            conditions.append("enabled = 1")
+        if agent_name:
+            conditions.append("agent_name = ?")
+            params.append(agent_name)
+        where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+        rows = self.conn.execute(
+            f"SELECT * FROM schedules {where} ORDER BY created_at DESC",
+            params,
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+    def remove_schedule(self, name_or_id: str) -> bool:
+        """Delete a schedule by name or numeric ID. Returns True if deleted."""
+        # Try numeric ID first
+        try:
+            sid = int(name_or_id)
+            cursor = self.conn.execute("DELETE FROM schedules WHERE id = ?", (sid,))
+        except ValueError:
+            cursor = self.conn.execute("DELETE FROM schedules WHERE name = ?", (name_or_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def pause_schedule(self, name_or_id: str) -> bool:
+        """Pause a schedule (enabled=0). Returns True if found."""
+        try:
+            sid = int(name_or_id)
+            cursor = self.conn.execute("UPDATE schedules SET enabled = 0 WHERE id = ?", (sid,))
+        except ValueError:
+            cursor = self.conn.execute("UPDATE schedules SET enabled = 0 WHERE name = ?", (name_or_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    def resume_schedule(self, name_or_id: str) -> bool:
+        """Resume a paused schedule (enabled=1). Returns True if found."""
+        try:
+            sid = int(name_or_id)
+            cursor = self.conn.execute("UPDATE schedules SET enabled = 1, consecutive_errors = 0 WHERE id = ?", (sid,))
+        except ValueError:
+            cursor = self.conn.execute("UPDATE schedules SET enabled = 1, consecutive_errors = 0 WHERE name = ?", (name_or_id,))
+        self.conn.commit()
+        return cursor.rowcount > 0
 
     def list_loops(
         self,

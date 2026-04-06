@@ -32,19 +32,20 @@ VALID_MODELS = ("sonnet", "opus", "haiku")
 # ── CLI help grouping ─────────────────────────────────────────────────────────
 
 _COMMAND_GROUPS: list[tuple[str, list[str]]] = [
-    ("SETUP",    ["setup", "setup-telegram", "doctor"]),
-    ("AGENTS",   ["create-agent", "delete-agent", "list-agents"]),
-    ("TASKS",    ["dispatch", "status", "kill", "queue", "cancel"]),
-    ("LOOPS",    ["loop", "loop-status", "loop-cancel", "loop-list", "loop-history"]),
-    ("TEAMS",    ["create-team", "team-dispatch"]),
-    ("DAEMON",   ["daemon"]),
-    ("OTHER",    ["cost", "set-model", "memory"]),
-    ("ADVANCED", [
+    ("SETUP",     ["setup", "setup-telegram", "doctor"]),
+    ("AGENTS",    ["create-agent", "delete-agent", "list-agents"]),
+    ("TASKS",     ["dispatch", "status", "kill", "queue", "cancel"]),
+    ("LOOPS",     ["loop", "loop-status", "loop-cancel", "loop-list", "loop-history"]),
+    ("SCHEDULES", ["schedule-add", "schedule-remove", "schedule-list", "schedule-pause", "schedule-resume"]),
+    ("TEAMS",     ["create-team", "team-dispatch"]),
+    ("DAEMON",    ["daemon"]),
+    ("OTHER",     ["cost", "set-model", "memory"]),
+    ("ADVANCED",  [
         "history", "loop-approve", "loop-reject",
         "permissions", "approve", "deny",
         "list-teams", "delete-team", "team-status",
         "setup-bot", "setup-cron", "remove-cron", "uninstall",
-        "on-complete", "watcher",
+        "on-complete", "watcher", "scheduler",
     ]),
 ]
 
@@ -320,6 +321,39 @@ def build_parser() -> argparse.ArgumentParser:
 
     # watcher (called by cron)
     sub.add_parser("watcher", help="Run watcher (cron fallback for dead PIDs)")
+
+    # scheduler (called by cron)
+    sub.add_parser("scheduler", help="Run scheduler (dispatch due scheduled tasks)")
+
+    # schedule-add
+    p = sub.add_parser("schedule-add", help="Create a recurring scheduled task")
+    p.add_argument("agent", help="Agent name")
+    p.add_argument("prompt", help="Task prompt to run on each schedule")
+    p.add_argument("--name", default=None, help="Schedule name (auto-generated if omitted)")
+    p.add_argument("--every", type=int, required=True, dest="interval_minutes",
+                   metavar="N", help="Interval in minutes")
+    p.add_argument("--channel", default="cli", help="Notification channel (cli/telegram)")
+    p.add_argument("--chat-id", default=None, help="Telegram chat ID for notifications")
+    p.add_argument("--user-id", default=None, help="Originating user ID")
+    p.add_argument("--once", action="store_true", help="Run once then disable")
+
+    # schedule-remove
+    p = sub.add_parser("schedule-remove", help="Remove a schedule")
+    p.add_argument("name_or_id", help="Schedule name or ID")
+
+    # schedule-list
+    p = sub.add_parser("schedule-list", help="List schedules")
+    p.add_argument("--agent", default=None, help="Filter by agent name")
+    p.add_argument("--all", action="store_true", dest="all_schedules",
+                   help="Include disabled/paused schedules")
+
+    # schedule-pause
+    p = sub.add_parser("schedule-pause", help="Pause a schedule")
+    p.add_argument("name_or_id", help="Schedule name or ID")
+
+    # schedule-resume
+    p = sub.add_parser("schedule-resume", help="Resume a paused schedule")
+    p.add_argument("name_or_id", help="Schedule name or ID")
 
     # doctor
     p = sub.add_parser("doctor", help="Diagnose installation health")
@@ -1054,6 +1088,7 @@ def cmd_setup_bot(db: BridgeDB, args):
 
 
 CRON_MARKER = "# claude-bridge-watcher"
+CRON_SCHEDULER_MARKER = "# claude-bridge-scheduler"
 
 
 def _get_cron_line() -> str:
@@ -1071,11 +1106,27 @@ def _get_cron_line() -> str:
         return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {CRON_MARKER}"
 
 
+def _get_scheduler_cron_line() -> str:
+    """Get the cron line for the scheduler."""
+    import shutil
+    from . import get_bridge_home as _gbh_cron
+    bridge_home = str(_gbh_cron())
+    log_path = str(_gbh_cron() / "scheduler.log")
+    bridge_cli = shutil.which("bridge-cli")
+    if bridge_cli:
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} scheduler >> {log_path} 2>&1 {CRON_SCHEDULER_MARKER}"
+    else:
+        src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        python_path = shutil.which("python3") or sys.executable
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.cli scheduler >> {log_path} 2>&1 {CRON_SCHEDULER_MARKER}"
+
+
 def cmd_setup_cron(db: BridgeDB, args):
-    """Install the watcher cron job."""
+    """Install the watcher and scheduler cron jobs."""
     import subprocess
 
-    cron_line = _get_cron_line()
+    watcher_line = _get_cron_line()
+    scheduler_line = _get_scheduler_cron_line()
 
     # Read existing crontab
     try:
@@ -1085,26 +1136,39 @@ def cmd_setup_cron(db: BridgeDB, args):
         print("Error: crontab not found.", file=sys.stderr)
         return 1
 
-    # Check if already installed
+    lines_to_add = []
     if CRON_MARKER in existing:
-        print("Watcher cron already installed. Use 'remove-cron' first to reinstall.")
+        print("Watcher cron already installed.")
+    else:
+        lines_to_add.append(watcher_line)
+
+    if CRON_SCHEDULER_MARKER in existing:
+        print("Scheduler cron already installed.")
+    else:
+        lines_to_add.append(scheduler_line)
+
+    if not lines_to_add:
+        print("Both watcher and scheduler cron already installed. Use 'remove-cron' first to reinstall.")
         return 0
 
-    # Append our cron line
-    new_crontab = existing.rstrip("\n") + "\n" + cron_line + "\n"
+    new_crontab = existing.rstrip("\n") + "\n" + "\n".join(lines_to_add) + "\n"
     result = subprocess.run(["crontab", "-"], input=new_crontab, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"Error installing cron: {result.stderr}", file=sys.stderr)
         return 1
 
-    print(f"Watcher cron installed (runs every minute).")
     from . import get_bridge_home as _gbh_log
-    print(f"  Log: {_gbh_log() / 'watcher.log'}")
+    if watcher_line in lines_to_add:
+        print(f"Watcher cron installed (runs every minute).")
+        print(f"  Log: {_gbh_log() / 'watcher.log'}")
+    if scheduler_line in lines_to_add:
+        print(f"Scheduler cron installed (runs every minute).")
+        print(f"  Log: {_gbh_log() / 'scheduler.log'}")
     return 0
 
 
 def cmd_remove_cron(db: BridgeDB, args):
-    """Remove the watcher cron job."""
+    """Remove the watcher and scheduler cron jobs."""
     import subprocess
 
     try:
@@ -1114,16 +1178,17 @@ def cmd_remove_cron(db: BridgeDB, args):
         print("Error: crontab not found.", file=sys.stderr)
         return 1
 
-    if CRON_MARKER not in existing:
-        print("No watcher cron found.")
+    if CRON_MARKER not in existing and CRON_SCHEDULER_MARKER not in existing:
+        print("No bridge cron jobs found.")
         return 0
 
-    # Remove our line
-    lines = [l for l in existing.split("\n") if CRON_MARKER not in l]
+    # Remove both our lines
+    lines = [l for l in existing.split("\n")
+             if CRON_MARKER not in l and CRON_SCHEDULER_MARKER not in l]
     new_crontab = "\n".join(lines).strip() + "\n"
     subprocess.run(["crontab", "-"], input=new_crontab, capture_output=True, text=True)
 
-    print("Watcher cron removed.")
+    print("Bridge cron jobs removed (watcher + scheduler).")
     return 0
 
 
@@ -1239,6 +1304,112 @@ def cmd_cancel(db: BridgeDB, args):
     else:
         print(f"Error: Task #{args.task_id} is not in the queue (status: {task['status']}).", file=sys.stderr)
         return 1
+
+
+def _slug(text: str, max_len: int = 20) -> str:
+    """Convert text to a URL-safe slug for auto-naming schedules."""
+    import re
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s[:max_len]
+
+
+def cmd_schedule_add(db: BridgeDB, args):
+    """Create a recurring scheduled task."""
+    agent = db.get_agent(args.agent)
+    if not agent:
+        print(f"Error: Agent '{args.agent}' not found.", file=sys.stderr)
+        return 1
+
+    name = args.name or f"{args.agent}-{_slug(args.prompt)}"
+    chat_id = getattr(args, "chat_id", None)
+    user_id = getattr(args, "user_id", None)
+    channel = getattr(args, "channel", "cli")
+    run_once = getattr(args, "once", False)
+
+    try:
+        sid = db.add_schedule(
+            name=name,
+            agent_name=args.agent,
+            prompt=args.prompt,
+            interval_minutes=args.interval_minutes,
+            channel=channel,
+            channel_chat_id=chat_id,
+            user_id=user_id,
+            run_once=run_once,
+        )
+    except Exception as e:
+        if "UNIQUE" in str(e):
+            print(f"Error: Schedule '{name}' already exists for agent '{args.agent}'.", file=sys.stderr)
+        else:
+            print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+    s = db.get_schedule_by_name(name)
+    print(f"Schedule '{name}' created (id={sid}).")
+    print(f"  Agent:    {args.agent}")
+    print(f"  Prompt:   {args.prompt}")
+    print(f"  Interval: every {args.interval_minutes}m")
+    print(f"  Next run: {s['next_run_at']}")
+    if run_once:
+        print(f"  Mode:     run-once (disabled after first dispatch)")
+    return 0
+
+
+def cmd_schedule_remove(db: BridgeDB, args):
+    """Remove a schedule by name or ID."""
+    if db.remove_schedule(args.name_or_id):
+        print(f"Schedule '{args.name_or_id}' removed.")
+        return 0
+    else:
+        print(f"Error: Schedule '{args.name_or_id}' not found.", file=sys.stderr)
+        return 1
+
+
+def cmd_schedule_list(db: BridgeDB, args):
+    """List schedules."""
+    agent_filter = getattr(args, "agent", None)
+    include_all = getattr(args, "all_schedules", False)
+    schedules = db.list_schedules(agent_name=agent_filter, include_disabled=include_all)
+    if not schedules:
+        print("No schedules found.")
+        return 0
+
+    print(f"{'NAME':<25} {'AGENT':<15} {'EVERY':<8} {'RUNS':<6} {'ERRORS':<7} {'ENABLED':<8} NEXT RUN")
+    for s in schedules:
+        every = f"{s['interval_minutes']}m"
+        enabled = "yes" if s["enabled"] else "no"
+        next_run = (s["next_run_at"] or "")[:16]
+        errors = s["consecutive_errors"] or 0
+        print(f"{s['name']:<25} {s['agent_name']:<15} {every:<8} {s['run_count']:<6} {errors:<7} {enabled:<8} {next_run}")
+    return 0
+
+
+def cmd_schedule_pause(db: BridgeDB, args):
+    """Pause a schedule."""
+    if db.pause_schedule(args.name_or_id):
+        print(f"Schedule '{args.name_or_id}' paused.")
+        return 0
+    else:
+        print(f"Error: Schedule '{args.name_or_id}' not found.", file=sys.stderr)
+        return 1
+
+
+def cmd_schedule_resume(db: BridgeDB, args):
+    """Resume a paused schedule."""
+    if db.resume_schedule(args.name_or_id):
+        print(f"Schedule '{args.name_or_id}' resumed.")
+        return 0
+    else:
+        print(f"Error: Schedule '{args.name_or_id}' not found.", file=sys.stderr)
+        return 1
+
+
+def cmd_scheduler(db: BridgeDB, args):
+    """Runner: read due schedules and dispatch. Called by cron every minute."""
+    from .scheduler import run_scheduler
+    run_scheduler(db)
+    return 0
 
 
 def cmd_create_team(db: BridgeDB, args):
@@ -2118,6 +2289,12 @@ COMMANDS = {
     "loop-reject": cmd_loop_reject,
     "loop-list": cmd_loop_list,
     "loop-history": cmd_loop_history,
+    "schedule-add": cmd_schedule_add,
+    "schedule-remove": cmd_schedule_remove,
+    "schedule-list": cmd_schedule_list,
+    "schedule-pause": cmd_schedule_pause,
+    "schedule-resume": cmd_schedule_resume,
+    "scheduler": cmd_scheduler,
     "setup": cmd_setup,
     "setup-bot": cmd_setup_bot,
     "setup-telegram": cmd_setup_telegram,
