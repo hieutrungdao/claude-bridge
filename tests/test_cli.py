@@ -1144,6 +1144,59 @@ class TestCronLineEnv:
         assert "PYTHONPATH=" in line
         assert "claude_bridge.watcher" in line
 
+    def test_watcher_cron_includes_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("PATH", "/home/user/.local/bin:/usr/bin:/bin")
+        from claude_bridge.cli import _get_cron_line
+
+        with patch("shutil.which", return_value="/usr/local/bin/bridge-cli"):
+            line = _get_cron_line()
+
+        assert "PATH=/home/user/.local/bin:/usr/bin:/bin" in line
+
+    def test_watcher_cron_path_before_bridge_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("PATH", "/home/user/.local/bin:/usr/bin")
+        from claude_bridge.cli import _get_cron_line
+
+        with patch("shutil.which", return_value="/usr/local/bin/bridge-cli"):
+            line = _get_cron_line()
+
+        path_pos = line.index("PATH=")
+        bridge_home_pos = line.index("CLAUDE_BRIDGE_HOME=")
+        assert path_pos < bridge_home_pos
+
+    def test_scheduler_cron_includes_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("PATH", "/home/user/.local/bin:/usr/bin:/bin")
+        from claude_bridge.cli import _get_scheduler_cron_line
+
+        with patch("shutil.which", return_value="/usr/local/bin/bridge-cli"):
+            line = _get_scheduler_cron_line()
+
+        assert "PATH=/home/user/.local/bin:/usr/bin:/bin" in line
+        assert "scheduler" in line
+
+    def test_watcher_fallback_includes_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("PATH", "/home/user/.local/bin:/usr/bin:/bin")
+        from claude_bridge.cli import _get_cron_line
+
+        with patch("shutil.which", return_value=None):
+            line = _get_cron_line()
+
+        assert "PATH=/home/user/.local/bin:/usr/bin:/bin" in line
+
+    def test_scheduler_fallback_includes_path(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("PATH", "/home/user/.local/bin:/usr/bin:/bin")
+        from claude_bridge.cli import _get_scheduler_cron_line
+
+        with patch("shutil.which", return_value=None):
+            line = _get_scheduler_cron_line()
+
+        assert "PATH=/home/user/.local/bin:/usr/bin:/bin" in line
+
 
 class TestCronMarkers:
     """Cron markers must be instance-scoped to prevent cross-instance collisions."""

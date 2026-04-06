@@ -1106,12 +1106,13 @@ def _get_cron_line() -> str:
     log_path = str(_gbh_cron() / "watcher.log")
     bridge_cli = shutil.which("bridge-cli")
     cron_marker, _ = _get_cron_markers()
+    path_env = os.environ.get("PATH", "")
     if bridge_cli:
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} watcher >> {log_path} 2>&1 {cron_marker}"
+        return f"* * * * * PATH={path_env} CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} watcher >> {log_path} 2>&1 {cron_marker}"
     else:
         src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         python_path = shutil.which("python3") or sys.executable
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {cron_marker}"
+        return f"* * * * * PATH={path_env} CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {cron_marker}"
 
 
 def _get_scheduler_cron_line() -> str:
@@ -1122,12 +1123,13 @@ def _get_scheduler_cron_line() -> str:
     log_path = str(_gbh_cron() / "scheduler.log")
     bridge_cli = shutil.which("bridge-cli")
     _, cron_scheduler_marker = _get_cron_markers()
+    path_env = os.environ.get("PATH", "")
     if bridge_cli:
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
+        return f"* * * * * PATH={path_env} CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
     else:
         src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         python_path = shutil.which("python3") or sys.executable
-        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.cli scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
+        return f"* * * * * PATH={path_env} CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.cli scheduler >> {log_path} 2>&1 {cron_scheduler_marker}"
 
 
 def cmd_setup_cron(db: BridgeDB, args):
