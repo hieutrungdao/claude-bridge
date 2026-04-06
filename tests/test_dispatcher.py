@@ -80,6 +80,22 @@ class TestSpawnTask:
         assert tasks_dir.is_dir()
 
     @patch("claude_bridge.dispatcher.subprocess.Popen")
+    def test_passes_claude_bridge_home_in_env(self, mock_popen, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "claude_bridge.dispatcher.get_tasks_dir",
+            lambda sid: str(tmp_path / "tasks"),
+        )
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "custom-bridge"))
+        mock_popen.return_value = MagicMock(pid=99)
+
+        spawn_task("bridge--backend--api", "backend--api", "/projects/api", "do task", 1)
+
+        call_kwargs = mock_popen.call_args[1]
+        env = call_kwargs.get("env", {})
+        assert "CLAUDE_BRIDGE_HOME" in env
+        assert env["CLAUDE_BRIDGE_HOME"] == str(tmp_path / "custom-bridge")
+
+    @patch("claude_bridge.dispatcher.subprocess.Popen")
     def test_redirects_stdout_to_result_file(self, mock_popen, tmp_path, monkeypatch):
         tasks_dir = tmp_path / "tasks"
         monkeypatch.setattr(

@@ -917,6 +917,7 @@ def generate_mcp_json(mode: str = "channel") -> str:
         else:
             channel_path = deployed
 
+    bridge_home_str = str(_gbh())
     if mode == "channel":
         bun_path = shutil.which("bun") or "bun"
         mcp_config = {
@@ -928,6 +929,7 @@ def generate_mcp_json(mode: str = "channel") -> str:
                     "env": {
                         "TELEGRAM_BOT_TOKEN": bot_token,
                         "MESSAGES_DB_PATH": str(_gbh() / "messages.db"),
+                        "CLAUDE_BRIDGE_HOME": bridge_home_str,
                     },
                 }
             }
@@ -943,6 +945,7 @@ def generate_mcp_json(mode: str = "channel") -> str:
                     "env": {
                         "PYTHONPATH": src_path,
                         "TELEGRAM_BOT_TOKEN": bot_token,
+                        "CLAUDE_BRIDGE_HOME": bridge_home_str,
                     },
                 }
             }
@@ -1057,14 +1060,15 @@ def _get_cron_line() -> str:
     """Get the cron line for the watcher."""
     import shutil
     from . import get_bridge_home as _gbh_cron
+    bridge_home = str(_gbh_cron())
     log_path = str(_gbh_cron() / "watcher.log")
     bridge_cli = shutil.which("bridge-cli")
     if bridge_cli:
-        return f"* * * * * {bridge_cli} watcher >> {log_path} 2>&1 {CRON_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} {bridge_cli} watcher >> {log_path} 2>&1 {CRON_MARKER}"
     else:
         src_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         python_path = shutil.which("python3") or sys.executable
-        return f"* * * * * PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {CRON_MARKER}"
+        return f"* * * * * CLAUDE_BRIDGE_HOME={bridge_home} PYTHONPATH={src_path} {python_path} -m claude_bridge.watcher >> {log_path} 2>&1 {CRON_MARKER}"
 
 
 def cmd_setup_cron(db: BridgeDB, args):

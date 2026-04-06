@@ -53,6 +53,10 @@ def spawn_task(
         cmd.extend(["--model", model])
     cmd.extend(["-p", prompt])
 
+    # Pass CLAUDE_BRIDGE_HOME so the stop hook finds the correct DB in multi-instance setups
+    from . import get_bridge_home
+    env = {**os.environ, "CLAUDE_BRIDGE_HOME": str(get_bridge_home())}
+
     with open(result_file, "w") as out_f, open(stderr_file, "w") as err_f:
         process = subprocess.Popen(
             cmd,
@@ -60,6 +64,7 @@ def spawn_task(
             stderr=err_f,
             cwd=expanded_dir,
             start_new_session=True,
+            env=env,
         )
 
     return process.pid

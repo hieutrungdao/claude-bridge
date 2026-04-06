@@ -413,6 +413,12 @@ export function bridgeCli(srcPath: string, command: string, args: string[] = [])
   // Use execFileSync (not shell string) to prevent command injection via args
   const execOpts = { timeout: 30000, encoding: "utf8" as const };
 
+  // Always forward CLAUDE_BRIDGE_HOME so bridge-cli targets the correct instance DB
+  const bridgeEnv: NodeJS.ProcessEnv = { ...process.env };
+  if (process.env.CLAUDE_BRIDGE_HOME) {
+    bridgeEnv.CLAUDE_BRIDGE_HOME = process.env.CLAUDE_BRIDGE_HOME;
+  }
+
   let hasBridgeCli = false;
   try {
     execSync("which bridge-cli", { encoding: "utf8" });
@@ -423,12 +429,12 @@ export function bridgeCli(srcPath: string, command: string, args: string[] = [])
 
   try {
     if (hasBridgeCli) {
-      return execFileSync("bridge-cli", [command, ...args], execOpts).trim();
+      return execFileSync("bridge-cli", [command, ...args], { ...execOpts, env: bridgeEnv }).trim();
     } else {
       const pythonPath = process.env.PYTHON_PATH ?? "python3";
       return execFileSync(pythonPath, ["-m", "claude_bridge.cli", command, ...args], {
         ...execOpts,
-        env: { ...process.env, PYTHONPATH: srcPath },
+        env: { ...bridgeEnv, PYTHONPATH: srcPath },
       }).trim();
     }
   } catch (err: any) {

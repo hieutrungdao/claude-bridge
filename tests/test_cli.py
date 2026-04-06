@@ -1116,3 +1116,63 @@ class TestTeamEndToEnd:
         history = db.get_task_history(lead["session_id"])
         assert len(history) == 1
         assert history[0]["task_type"] == "team"
+
+
+class TestCronLineEnv:
+    """CLAUDE_BRIDGE_HOME must be injected into cron lines."""
+
+    def test_bridge_cli_variant_includes_bridge_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        import shutil
+        from claude_bridge.cli import _get_cron_line
+
+        with patch("shutil.which", return_value="/usr/local/bin/bridge-cli"):
+            line = _get_cron_line()
+
+        assert f"CLAUDE_BRIDGE_HOME={tmp_path / 'my-bridge'}" in line
+        assert "bridge-cli" in line
+        assert "watcher" in line
+
+    def test_python_fallback_variant_includes_bridge_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        from claude_bridge.cli import _get_cron_line
+
+        with patch("shutil.which", return_value=None):
+            line = _get_cron_line()
+
+        assert f"CLAUDE_BRIDGE_HOME={tmp_path / 'my-bridge'}" in line
+        assert "PYTHONPATH=" in line
+        assert "claude_bridge.watcher" in line
+
+
+class TestGenerateMcpJsonEnv:
+    """CLAUDE_BRIDGE_HOME must appear in .mcp.json env section."""
+
+    def test_channel_mode_includes_bridge_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("CLAUDE_BRIDGE_BOT_TOKEN", "test-token")
+        import json
+        from claude_bridge.cli import generate_mcp_json
+
+        with patch("shutil.which", return_value="/usr/bin/bun"), \
+             patch("os.path.isfile", return_value=True):
+            result = generate_mcp_json(mode="channel")
+
+        config = json.loads(result)
+        env = config["mcpServers"]["bridge"]["env"]
+        assert "CLAUDE_BRIDGE_HOME" in env
+        assert env["CLAUDE_BRIDGE_HOME"] == str(tmp_path / "my-bridge")
+
+    def test_mcp_mode_includes_bridge_home(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(tmp_path / "my-bridge"))
+        monkeypatch.setenv("CLAUDE_BRIDGE_BOT_TOKEN", "test-token")
+        import json
+        from claude_bridge.cli import generate_mcp_json
+
+        with patch("shutil.which", return_value="/usr/bin/python3"):
+            result = generate_mcp_json(mode="mcp")
+
+        config = json.loads(result)
+        env = config["mcpServers"]["bridge"]["env"]
+        assert "CLAUDE_BRIDGE_HOME" in env
+        assert env["CLAUDE_BRIDGE_HOME"] == str(tmp_path / "my-bridge")
