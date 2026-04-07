@@ -35,6 +35,40 @@ research/                Research from architecture exploration
 - **Worktree isolation**: Each task runs in isolated git worktree (no concurrent corruption)
 - **Auto Memory**: Claude Code auto-learns patterns. Bridge reads via `/memory` command.
 
+## Multi-Instance Setup
+
+Claude Bridge supports multiple isolated instances using `CLAUDE_BRIDGE_HOME`:
+
+**Main instance:**
+```bash
+bridge start              # Uses ~/.claude-bridge (default)
+bridge stop
+bridge status
+```
+
+**Additional instances (e.g., tam):**
+```bash
+# Setup once
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam \
+  bridge-cli setup --token "<token>" --chat-id "<chat-id>" --bot-dir ~/projects/bridge-bot-tam --no-prompt
+
+# Start/stop
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge start    # Auto-uses unique session: claude-bridge-{hash}
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge stop
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge status
+```
+
+**Session names:**
+- Default home (`~/.claude-bridge`) → session `claude-bridge`
+- Other homes → session `claude-bridge-{md5hash[:8]}`
+- Hash ensures no conflicts when running multiple instances
+
+**Aliases for convenience:**
+```bash
+alias bridge-tam='CLAUDE_BRIDGE_HOME=~/.claude-bridge-tam bridge'
+# Then: bridge-tam start, bridge-tam stop, etc.
+```
+
 ## Build & Test
 
 ```bash

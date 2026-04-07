@@ -6,12 +6,27 @@ All tmux interaction via subprocess calls — stdlib only.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
 import time
 
-TMUX_SESSION_NAME = "claude-bridge"
+
+def _get_session_name() -> str:
+    """Get unique session name per CLAUDE_BRIDGE_HOME."""
+    from . import get_bridge_home
+    bridge_home = str(get_bridge_home())
+    # Use hash suffix to make session name unique per instance
+    home_hash = hashlib.md5(bridge_home.encode()).hexdigest()[:8]
+    # Default bridge home → "claude-bridge", others → "claude-bridge-{hash}"
+    default_home = os.path.expanduser("~/.claude-bridge")
+    if bridge_home == default_home:
+        return "claude-bridge"
+    return f"claude-bridge-{home_hash}"
+
+
+TMUX_SESSION_NAME = _get_session_name()
 
 
 def _get_log_path() -> str:
