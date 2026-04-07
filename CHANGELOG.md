@@ -6,6 +6,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.2] — 2026-04-07
+
+### Fixed
+
+- **`channel_server/dist/server.js`** — pre-built file was missing from PyPI package after
+  `pip install claude-agent-bridge` because `channel_server/dist/` was gitignored.
+  Fixed by adding `.gitignore` negation (`!src/claude_bridge/channel_server/dist/`) and
+  `MANIFEST.in` to explicitly include the file in wheel/sdist.
+
+---
+
 ## [0.5.1] — 2026-04-07
 
 ### Fixed
