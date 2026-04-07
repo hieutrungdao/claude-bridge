@@ -21880,6 +21880,34 @@ import { join } from "path";
 var CHUNK_LIMIT = 4000;
 var PRE_OPEN = "<pre><code>";
 var PRE_CLOSE = "</code></pre>";
+function convertMarkdownTables(text) {
+  const lines = text.split(`
+`);
+  const result = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (/^\s*\|.+\|/.test(line) && i + 1 < lines.length && /^\s*\|[\s\-:|]+\|/.test(lines[i + 1])) {
+      const tableLines = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      for (const tableLine of tableLines) {
+        if (/^\s*\|[\s\-:|]+\|\s*$/.test(tableLine))
+          continue;
+        const cells = tableLine.split("|").map((c) => c.trim()).filter((c) => c !== "");
+        if (cells.length > 0)
+          result.push(cells.join(" | "));
+      }
+    } else {
+      result.push(line);
+      i++;
+    }
+  }
+  return result.join(`
+`);
+}
 function convertMarkdownToTelegramHtml(text) {
   const codeBlocks = [];
   let result = text.replace(/```[\w-]*\n?([\s\S]*?)```/g, (_, code) => {
@@ -21893,6 +21921,7 @@ function convertMarkdownToTelegramHtml(text) {
     inlineCodes.push(code);
     return `\x00IC${idx}\x00`;
   });
+  result = convertMarkdownTables(result);
   result = result.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   result = result.replace(/\x00IC(\d+)\x00/g, (_, idx) => {
     const code = inlineCodes[Number(idx)];
@@ -21973,7 +22002,7 @@ function isTelegramHtmlParseError(err) {
   return /can't parse|parse entities|find end of the entity/i.test(msg);
 }
 function stripHtmlTags(html) {
-  return html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  return html.replace(/<[^>]+>/g, "").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/^#{1,6}\s+/gm, "").replace(/\*\*([^*\n]+)\*\*/g, "$1").replace(/(?<![_\w])__([^_\n]+)__(?![_\w])/g, "$1").replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1").replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, "$1").replace(/~~([^~\n]+)~~/g, "$1").replace(/`([^`\n]+)`/g, "$1");
 }
 async function sendTelegramChunked(sendFn, chatId, markdownText, opts) {
   if (!markdownText || !markdownText.trim())

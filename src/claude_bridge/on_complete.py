@@ -130,9 +130,9 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
         if result:
             if result.get("is_error"):
                 status = "failed"
-                error = str(result.get("result", "Unknown error"))[:500]
+                error = str(result.get("result", "Unknown error"))
             else:
-                summary = str(result.get("result", ""))[:500]
+                summary = str(result.get("result", ""))
             cost = result.get("total_cost_usd", 0) or 0
             duration = result.get("duration_ms", 0) or 0
             turns = result.get("num_turns", 0) or 0
@@ -146,7 +146,7 @@ def main(db: BridgeDB | None = None, msg_db_path: str | None = None):
                         stderr_content = f.read().strip()
                     if stderr_content:
                         status = "failed"
-                        error = stderr_content[:500]
+                        error = stderr_content
                         exit_code = -1
 
         # Update task
