@@ -47,7 +47,7 @@ def _repair_incomplete_done_tasks(db: BridgeDB) -> None:
             if not result or result.get("is_error"):
                 continue
 
-            summary = str(result.get("result", ""))[:500]
+            summary = str(result.get("result", ""))[:2000]
             cost = result.get("total_cost_usd", 0) or 0
             duration = result.get("duration_ms", 0) or 0
             turns = result.get("num_turns", 0) or 0
@@ -116,7 +116,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                     db.update_task(
                         task_id,
                         status="done",
-                        result_summary=str(result.get("result", ""))[:500],
+                        result_summary=str(result.get("result", ""))[:2000],
                         cost_usd=result.get("total_cost_usd", 0),
                         duration_ms=result.get("duration_ms", 0),
                         num_turns=result.get("num_turns", 0),
