@@ -10,6 +10,9 @@ build/
 *.egg
 .eggs/
 
+# Keep pre-built channel server JS in package (needed for pip install)
+!src/claude_bridge/channel_server/dist/
+
 # IDE
 .vscode/
 .idea/
