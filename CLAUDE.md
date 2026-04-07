@@ -135,6 +135,17 @@ Key rules:
 - Commit format: `M{M}.T{T}: {description}`
 - Never call real `claude` CLI in tests — always mock subprocess
 
+## Release Process
+
+Khi release version mới:
+1. Bump version trong pyproject.toml
+2. Update CHANGELOG.md
+3. Commit changes
+4. Tag version: git tag vX.Y.Z
+5. Push commit + tag: git push && git push --tags
+6. Tạo GitHub Release: gh release create vX.Y.Z --title "vX.Y.Z" --notes "..."
+   QUAN TRỌNG: Phải tạo GitHub Release vì PyPI publish workflow trigger trên "release published" event, KHÔNG phải tag push.
+
 ## Debugging Critical Bugs
 
 When asked to fix a critical bug, DO NOT jump to conclusions. Follow this process:

@@ -10,18 +10,59 @@ const PRE_OPEN = "<pre><code>";
 const PRE_CLOSE = "</code></pre>";
 
 /**
+ * Convert markdown tables to plain text lines.
+ * Telegram HTML does not support <table> tags; complex table HTML gets rejected.
+ * Each data row becomes "cell1 | cell2 | ..." — separator rows (|---|) are dropped.
+ */
+function convertMarkdownTables(text: string): string {
+  const lines = text.split("\n");
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+    // A table starts with a pipe-delimited row followed by a separator row
+    if (
+      /^\s*\|.+\|/.test(line) &&
+      i + 1 < lines.length &&
+      /^\s*\|[\s\-:|]+\|/.test(lines[i + 1])
+    ) {
+      // Collect all consecutive lines that are part of this table
+      const tableLines: string[] = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) {
+        tableLines.push(lines[i]);
+        i++;
+      }
+      // Convert: skip separator rows, format data rows as "cell1 | cell2"
+      for (const tableLine of tableLines) {
+        if (/^\s*\|[\s\-:|]+\|\s*$/.test(tableLine)) continue;
+        const cells = tableLine.split("|").map((c) => c.trim()).filter((c) => c !== "");
+        if (cells.length > 0) result.push(cells.join(" | "));
+      }
+    } else {
+      result.push(line);
+      i++;
+    }
+  }
+
+  return result.join("\n");
+}
+
+/**
  * Convert Markdown text to Telegram HTML format.
  *
  * Processing order (important to avoid conflicts):
  * 1. Extract and protect fenced code blocks (```...```) with placeholders
- * 2. Escape HTML entities (&, <, >) in non-code text
- * 3. Convert inline code (`...`)
- * 4. Convert headings (# → <b>)
- * 5. Convert bold (**text** or __text__)
- * 6. Convert italic (*text* or _text_)
- * 7. Convert strikethrough (~~text~~)
- * 8. Convert links ([label](url))
- * 9. Restore code blocks with escaped content
+ * 2. Extract and protect inline code (`...`) with placeholders
+ * 3. Convert markdown tables to plain text (tables not supported in Telegram HTML)
+ * 4. Escape HTML entities (&, <, >) in non-code text
+ * 5. Restore inline code with escaped content
+ * 6. Convert headings (# → <b>)
+ * 7. Convert bold (**text** or __text__)
+ * 8. Convert italic (*text* or _text_)
+ * 9. Convert strikethrough (~~text~~)
+ * 10. Convert links ([label](url))
+ * 11. Restore code blocks with escaped content
  */
 export function convertMarkdownToTelegramHtml(text: string): string {
   // Step 1: Extract fenced code blocks
@@ -40,13 +81,16 @@ export function convertMarkdownToTelegramHtml(text: string): string {
     return `\x00IC${idx}\x00`;
   });
 
-  // Step 3: Escape HTML entities in non-code text
+  // Step 3: Convert markdown tables to plain text (Telegram doesn't support HTML tables)
+  result = convertMarkdownTables(result);
+
+  // Step 4: Escape HTML entities in non-code text
   result = result
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;");
 
-  // Step 4: Restore inline code with escaped content
+  // Step 5: Restore inline code with escaped content
   result = result.replace(/\x00IC(\d+)\x00/g, (_, idx) => {
     const code = inlineCodes[Number(idx)];
     const escaped = code
@@ -56,24 +100,24 @@ export function convertMarkdownToTelegramHtml(text: string): string {
     return `<code>${escaped}</code>`;
   });
 
-  // Step 5: Convert headings (# Title → <b>Title</b>)
+  // Step 6: Convert headings (# Title → <b>Title</b>)
   result = result.replace(/^#{1,6}\s+(.+)$/gm, "<b>$1</b>");
 
-  // Step 5: Convert bold (**text** or __text__)
+  // Step 7: Convert bold (**text** or __text__)
   result = result.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
   result = result.replace(/(?<![_\w])__([^_\n]+)__(?![_\w])/g, "<b>$1</b>");
 
-  // Step 6: Convert italic (*text* or _text_) — after bold to avoid conflict
+  // Step 8: Convert italic (*text* or _text_) — after bold to avoid conflict
   result = result.replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "<i>$1</i>");
   result = result.replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, "<i>$1</i>");
 
-  // Step 7: Convert strikethrough
+  // Step 9: Convert strikethrough
   result = result.replace(/~~([^~\n]+)~~/g, "<s>$1</s>");
 
-  // Step 8: Convert links [label](url)
+  // Step 10: Convert links [label](url)
   result = result.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
 
-  // Step 9: Restore code blocks with HTML-escaped content
+  // Step 11: Restore code blocks with HTML-escaped content
   result = result.replace(/\x00CB(\d+)\x00/g, (_, idx) => {
     const code = codeBlocks[Number(idx)];
     const escaped = code
@@ -162,14 +206,24 @@ export function isTelegramHtmlParseError(err: unknown): boolean {
 }
 
 /**
- * Strip HTML tags and unescape HTML entities (for plain text fallback).
+ * Strip HTML tags, unescape HTML entities, and clean up residual markdown symbols.
+ * Used for plain-text fallback when Telegram rejects HTML parse mode.
+ * Removes <tags>, unescapes &entities;, and strips **bold**, ##headings, etc.
  */
 export function stripHtmlTags(html: string): string {
   return html
     .replace(/<[^>]+>/g, "")
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">");
+    .replace(/&gt;/g, ">")
+    // Strip residual markdown symbols (safety net for patterns not yet converted)
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1")
+    .replace(/(?<![_\w])__([^_\n]+)__(?![_\w])/g, "$1")
+    .replace(/(?<!\*)\*([^*\n]+)\*(?!\*)/g, "$1")
+    .replace(/(?<![_\w])_([^_\n]+)_(?![_\w])/g, "$1")
+    .replace(/~~([^~\n]+)~~/g, "$1")
+    .replace(/`([^`\n]+)`/g, "$1");
 }
 
 /**

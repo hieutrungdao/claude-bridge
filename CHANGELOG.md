@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.3] — 2026-04-07
+
+### Added
+
+- **Markdown table support in Telegram messages** — `channel/format.ts` now converts
+  Markdown tables to plain `cell1 | cell2` text lines before HTML conversion, since
+  Telegram's HTML parse mode does not support `<table>` tags. Separator rows (`|---|`)
+  are dropped automatically.
+- **Residual markdown cleanup in plain-text fallback** — `stripHtmlTags()` in
+  `channel/format.ts` now also strips unconverted Markdown symbols (`**bold**`,
+  `## headings`, `*italic*`, `~~strike~~`, `` `code` ``) so the fallback plain-text
+  message is clean even when conversion is incomplete.
+- **Python port of Markdown formatter** — `telegram_poller.py` gains
+  `markdown_to_telegram_html()` (a Python mirror of the TypeScript formatter) and
+  `_strip_html()`. `telegram_send_message()` now sends with `parse_mode=HTML` and
+  falls back to plain text automatically when Telegram rejects the HTML.
+
+---
+
 ## [0.5.2] — 2026-04-07
 
 ### Fixed

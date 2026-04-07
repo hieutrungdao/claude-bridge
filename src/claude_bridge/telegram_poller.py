@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -73,18 +74,93 @@ def telegram_get_updates(
         return [], {}
 
 
+def markdown_to_telegram_html(text: str) -> str:
+    """Convert Markdown to Telegram HTML format (mirrors channel/format.ts)."""
+    # Step 1: Extract fenced code blocks
+    code_blocks: list[str] = []
+
+    def save_code_block(m: re.Match) -> str:
+        code_blocks.append(m.group(1))
+        return f"\x00CB{len(code_blocks) - 1}\x00"
+
+    result = re.sub(r"```[\w-]*\n?([\s\S]*?)```", save_code_block, text)
+
+    # Step 2: Extract inline code blocks
+    inline_codes: list[str] = []
+
+    def save_inline_code(m: re.Match) -> str:
+        inline_codes.append(m.group(1))
+        return f"\x00IC{len(inline_codes) - 1}\x00"
+
+    result = re.sub(r"`([^`\n]+)`", save_inline_code, result)
+
+    # Step 3: Escape HTML entities in non-code text
+    result = result.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    # Step 4: Restore inline code with escaped content
+    def restore_inline(m: re.Match) -> str:
+        code = inline_codes[int(m.group(1))]
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return f"<code>{escaped}</code>"
+
+    result = re.sub(r"\x00IC(\d+)\x00", restore_inline, result)
+
+    # Step 5: Convert headings (# Title → <b>Title</b>)
+    result = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", result, flags=re.MULTILINE)
+
+    # Step 6: Convert bold (**text** or __text__)
+    result = re.sub(r"\*\*([^*\n]+)\*\*", r"<b>\1</b>", result)
+    result = re.sub(r"(?<![_\w])__([^_\n]+)__(?![_\w])", r"<b>\1</b>", result)
+
+    # Step 7: Convert italic (*text* or _text_) — after bold to avoid conflict
+    result = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"<i>\1</i>", result)
+    result = re.sub(r"(?<![_\w])_([^_\n]+)_(?![_\w])", r"<i>\1</i>", result)
+
+    # Step 8: Convert strikethrough
+    result = re.sub(r"~~([^~\n]+)~~", r"<s>\1</s>", result)
+
+    # Step 9: Convert links [label](url)
+    result = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', result)
+
+    # Step 10: Restore code blocks with escaped content
+    def restore_code_block(m: re.Match) -> str:
+        code = code_blocks[int(m.group(1))]
+        escaped = code.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        return f"<pre><code>{escaped.rstrip(chr(10))}</code></pre>"
+
+    result = re.sub(r"\x00CB(\d+)\x00", restore_code_block, result)
+
+    return result
+
+
+def _strip_html(html: str) -> str:
+    """Strip HTML tags and unescape entities (plain text fallback)."""
+    text = re.sub(r"<[^>]+>", "", html)
+    return text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+
+
 def telegram_send_message(token: str, chat_id: str, text: str) -> bool:
-    """Send a message via Telegram Bot API."""
+    """Send a message via Telegram Bot API with HTML formatting (markdown converted)."""
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
-    req = Request(url, data=payload, headers={"Content-Type": "application/json"})
-    try:
-        with urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read())
-            return result.get("ok", False)
-    except Exception as e:
-        print(f"[poller] sendMessage error: {e}", file=sys.stderr)
-        return False
+    html = markdown_to_telegram_html(text)
+
+    def _post(body: dict) -> bool:
+        payload = json.dumps(body).encode()
+        req = Request(url, data=payload, headers={"Content-Type": "application/json"})
+        try:
+            with urlopen(req, timeout=10) as resp:
+                result = json.loads(resp.read())
+                return result.get("ok", False)
+        except Exception as e:
+            print(f"[poller] sendMessage error: {e}", file=sys.stderr)
+            return False
+
+    success = _post({"chat_id": chat_id, "text": html, "parse_mode": "HTML"})
+    if not success:
+        # Fallback: plain text if Telegram rejects HTML
+        print("[poller] HTML parse failed, falling back to plain text", file=sys.stderr)
+        return _post({"chat_id": chat_id, "text": _strip_html(html)})
+    return True
 
 
 class TelegramPoller:

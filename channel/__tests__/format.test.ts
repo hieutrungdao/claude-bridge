@@ -106,6 +106,54 @@ describe("convertMarkdownToTelegramHtml", () => {
     expect(output).not.toContain("\x00");
     expect(output).toContain("<pre><code>");
   });
+
+  test("markdown table converted to plain text lines", () => {
+    const input = "| col1 | col2 |\n|------|------|\n| a    | b    |";
+    const output = convertMarkdownToTelegramHtml(input);
+    expect(output).not.toContain("|------|");
+    expect(output).toContain("col1 | col2");
+    expect(output).toContain("a | b");
+  });
+
+  test("table separator row removed", () => {
+    const input = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const output = convertMarkdownToTelegramHtml(input);
+    expect(output).not.toContain("|---|");
+  });
+
+  test("table with bold in cells", () => {
+    const input = "| Status | Info |\n|--------|------|\n| **Done** | All pass |";
+    const output = convertMarkdownToTelegramHtml(input);
+    expect(output).toContain("<b>Done</b>");
+    expect(output).not.toContain("|--------|");
+  });
+
+  test("complex: headings + bold + table in one message", () => {
+    const input = [
+      "## Summary",
+      "",
+      "**Result:** success",
+      "",
+      "| Task | Status |",
+      "|------|--------|",
+      "| build | done |",
+      "| test | pass |",
+    ].join("\n");
+    const output = convertMarkdownToTelegramHtml(input);
+    expect(output).toContain("<b>Summary</b>");
+    expect(output).toContain("<b>Result:</b>");
+    expect(output).toContain("Task | Status");
+    expect(output).toContain("build | done");
+    expect(output).not.toContain("|------|");
+    expect(output).not.toContain("**");
+  });
+
+  test("non-table pipe content not affected", () => {
+    // A line with | but no separator row after it should not be converted
+    const input = "Use a | b for OR logic";
+    const output = convertMarkdownToTelegramHtml(input);
+    expect(output).toBe("Use a | b for OR logic");
+  });
 });
 
 // --- chunkTelegramMessage ---
@@ -255,6 +303,31 @@ describe("stripHtmlTags", () => {
   test("strips all tag types", () => {
     expect(stripHtmlTags("<b>bold</b> <i>italic</i> <s>strike</s>")).toBe("bold italic strike");
   });
+
+  test("strips residual **bold** markdown", () => {
+    expect(stripHtmlTags("**bold**")).toBe("bold");
+  });
+
+  test("strips residual ## heading markdown", () => {
+    expect(stripHtmlTags("## Title")).toBe("Title");
+  });
+
+  test("strips residual *italic* markdown", () => {
+    expect(stripHtmlTags("*italic*")).toBe("italic");
+  });
+
+  test("strips residual ~~strikethrough~~ markdown", () => {
+    expect(stripHtmlTags("~~strike~~")).toBe("strike");
+  });
+
+  test("strips residual `inline code` markdown", () => {
+    expect(stripHtmlTags("`code`")).toBe("code");
+  });
+
+  test("mixed HTML tags + residual markdown → clean plain text", () => {
+    const input = "<b>bold</b> and **also bold**\n## heading";
+    expect(stripHtmlTags(input)).toBe("bold and also bold\nheading");
+  });
 });
 
 // --- sendTelegramChunked ---
@@ -338,5 +411,22 @@ describe("sendTelegramChunked", () => {
     };
     await sendTelegramChunked(sendFn, "123", "   \n  ");
     expect(calls.length).toBe(0);
+  });
+
+  test("fallback from complex markdown has no raw ** or ## symbols", async () => {
+    let callCount = 0;
+    const calls: any[] = [];
+    const sendFn = async (chatId: string, text: string, opts?: any) => {
+      callCount++;
+      if (callCount === 1) throw new Error("Bad Request: can't parse entities");
+      calls.push({ chatId, text, opts });
+    };
+    const md = "## Summary\n\n**Result:** done\n\n| col | val |\n|-----|-----|\n| a   | b   |";
+    await sendTelegramChunked(sendFn, "123", md);
+    expect(calls.length).toBe(1);
+    expect(calls[0].text).not.toContain("**");
+    expect(calls[0].text).not.toContain("##");
+    expect(calls[0].text).toContain("Summary");
+    expect(calls[0].text).toContain("Result:");
   });
 });
