@@ -3,7 +3,8 @@
   "version": "0.2.0",
   "type": "module",
   "scripts": {
-    "start": "bun server.ts"
+    "start": "bun server.ts",
+    "build": "bun build server.ts --outdir ../src/claude_bridge/channel_server/dist --target node"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

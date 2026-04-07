@@ -171,6 +171,10 @@ else
   fi
 fi
 
+# Always ensure ~/.bun/bin is in PATH for the rest of this script
+# (covers both fresh installs and systems where bun exists but PATH isn't yet updated)
+export PATH="$HOME/.bun/bin:$PATH"
+
 # ── Check: tmux (optional, needed for 'bridge start') ────────────────────────
 
 if command -v tmux >/dev/null 2>&1; then
@@ -221,8 +225,8 @@ fi
 
 BUNDLE="$INSTALL_DIR/src/claude_bridge/channel_server/dist/server.js"
 info "Building channel server (TypeScript → JS bundle)..."
-(cd "$INSTALL_DIR" && bun run build) || fail "bun run build failed.
-  Try manually: cd $INSTALL_DIR && bun run build"
+(cd "$INSTALL_DIR/channel" && bun run build) || fail "bun run build failed.
+  Try manually: cd $INSTALL_DIR/channel && bun run build"
 
 if [ -f "$BUNDLE" ]; then
   BUNDLE_SIZE=$(wc -c < "$BUNDLE" | tr -d ' ')

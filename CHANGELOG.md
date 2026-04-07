@@ -6,6 +6,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.1] — 2026-04-07
+
+### Fixed
+
+- **`channel/package.json`** — added `build` script so `bun run build` works from the
+  `channel/` directory (was missing, causing `install.sh` to fail silently).
+- **`install.sh`** — `bun run build` now runs from `$INSTALL_DIR/channel/` (the correct
+  working directory) instead of `$INSTALL_DIR/`.
+- **`install.sh`** — `~/.bun/bin` is now added to `PATH` immediately after bun install,
+  before any subsequent `bun` invocations, preventing fallback-to-python errors on fresh
+  installs where the shell `PATH` has not yet been updated.
+- **`channel/server.ts`** — `bridge_dispatch` MCP tool now accepts `chat_id` and `user_id`
+  parameters and forwards them to `bridge-cli dispatch` via `--chat-id` / `--user-id`.
+- **`cli.py`** — `dispatch` command gains `--user-id` flag; when `--chat-id` is provided
+  without an explicit channel, the channel is auto-set to `telegram`.
+
+---
+
 ## [0.4.0] — 2026-04-05
 
 ### Added

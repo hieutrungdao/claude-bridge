@@ -134,6 +134,8 @@ mcp.setRequestHandler(ListToolsRequestSchema, async () => ({
           agent: { type: "string", description: "Agent name" },
           prompt: { type: "string", description: "Task prompt" },
           model: { type: "string", description: "Model override (optional)" },
+          chat_id: { type: "string", description: "Telegram chat ID for routing notifications back to the user (optional)" },
+          user_id: { type: "string", description: "Telegram user ID for multi-user tracking (optional)" },
         },
         required: ["agent", "prompt"],
       },
@@ -419,9 +421,11 @@ mcp.setRequestHandler(CallToolRequestSchema, async (req) => {
       }
 
       case "bridge_dispatch": {
-        const { agent, prompt, model } = args as { agent: string; prompt: string; model?: string };
+        const { agent, prompt, model, chat_id, user_id } = args as { agent: string; prompt: string; model?: string; chat_id?: string; user_id?: string };
         const cliArgs = [agent, prompt];
         if (model) cliArgs.push("--model", model);
+        if (chat_id) cliArgs.push("--chat-id", chat_id);
+        if (user_id) cliArgs.push("--user-id", user_id);
         const output = bridgeCli(BRIDGE_SRC_PATH, "dispatch", cliArgs);
         return { content: [{ type: "text", text: output }] };
       }

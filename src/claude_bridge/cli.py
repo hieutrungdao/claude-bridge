@@ -173,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--model", default=None, help="Model override for this task")
     p.add_argument("--channel", default="cli", help="Source channel (cli/telegram/discord/slack)")
     p.add_argument("--chat-id", default=None, help="Channel chat/thread ID")
+    p.add_argument("--user-id", default=None, help="Channel user ID")
     p.add_argument("--message-id", default=None, help="Channel message ID")
 
     # list-agents
@@ -476,10 +477,13 @@ def cmd_dispatch(db: BridgeDB, args):
 
     channel = getattr(args, "channel", None)
     chat_id = getattr(args, "chat_id", None)
+    user_id = getattr(args, "user_id", None)
     message_id = getattr(args, "message_id", None)
 
     # Auto-detect notification channel if not specified
-    if not channel or channel == "cli":
+    if chat_id and (not channel or channel == "cli"):
+        channel = "telegram"
+    elif not channel or channel == "cli":
         from .notify import get_default_channel
         channel, default_chat_id = get_default_channel()
         if not chat_id:
@@ -487,10 +491,10 @@ def cmd_dispatch(db: BridgeDB, args):
 
     # Atomically check if busy and create task — prevents concurrent dispatch race condition
     task_id, is_busy = db.atomic_check_and_create_task(
-        session_id, args.prompt, channel=channel, channel_chat_id=chat_id, channel_message_id=message_id
+        session_id, args.prompt, channel=channel, channel_chat_id=chat_id, channel_message_id=message_id, user_id=user_id
     )
     if is_busy:
-        queued_id = db.create_task(session_id, args.prompt, channel=channel, channel_chat_id=chat_id, channel_message_id=message_id)
+        queued_id = db.create_task(session_id, args.prompt, channel=channel, channel_chat_id=chat_id, channel_message_id=message_id, user_id=user_id)
         position = db.get_next_queue_position(session_id)
         db.update_task(queued_id, status="queued", position=position)
         print(f"Agent '{args.name}' is busy. Task #{queued_id} queued at position {position}.")
