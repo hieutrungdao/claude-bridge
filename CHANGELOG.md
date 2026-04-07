@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.5] — 2026-04-07
+
+### Fixed
+
+- **Unique tmux session name per `CLAUDE_BRIDGE_HOME`** — `tmux_session.py` now hashes
+  `CLAUDE_BRIDGE_HOME` (md5[:8]) to generate a unique session name per instance.
+  Default home (`~/.claude-bridge`) keeps the backward-compatible name `claude-bridge`;
+  all other homes get `claude-bridge-{hash}` (e.g. `claude-bridge-a2dbe0cf`).
+  This allows multiple bridge instances to run simultaneously without tmux session
+  name collisions.
+
+---
+
+## [0.5.4] — 2026-04-07
+
+*(version bump only — no code changes beyond 0.5.3)*
+
+---
+
 ## [0.5.3] — 2026-04-07
 
 ### Added

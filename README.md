@@ -262,16 +262,21 @@ CLAUDE_BRIDGE_HOME=~/.claude-bridge-bob \
   bridge-cli setup --token "token-bob" --bot-dir ~/projects/bridge-bot-bob --no-prompt
 ```
 
-Khởi động mỗi instance trong terminal riêng biệt (hoặc systemd unit / cửa sổ tmux):
+Khởi động mỗi instance (tên tmux session tự động unique theo `CLAUDE_BRIDGE_HOME`):
 
 ```bash
-# Instance cho Alice
-CLAUDE_BRIDGE_HOME=~/.claude-bridge-alice \
-  claude --dangerously-load-development-channels server:bridge --dangerously-skip-permissions
+# Instance cho Alice — tmux session: claude-bridge-{hash}
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-alice bridge start
 
-# Instance cho Bob
-CLAUDE_BRIDGE_HOME=~/.claude-bridge-bob \
-  claude --dangerously-load-development-channels server:bridge --dangerously-skip-permissions
+# Instance cho Bob — tmux session: claude-bridge-{hash}
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-bob bridge start
+```
+
+Dừng/kiểm tra trạng thái:
+
+```bash
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-alice bridge stop
+CLAUDE_BRIDGE_HOME=~/.claude-bridge-alice bridge status
 ```
 
 ### Những gì vẫn dùng chung giữa các instance
