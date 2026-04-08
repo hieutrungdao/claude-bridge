@@ -478,6 +478,80 @@ def _notify_pending_approval(db: BridgeDB, loop: dict, iteration_num: int) -> No
         print(f"[loop] Failed to send pending_approval notification for {loop_id}", file=sys.stderr)
 
 
+def _send_loop_notification(
+    db: BridgeDB,
+    loop_id: str,
+    task_id: str,
+    result_summary: str,
+    terminal: bool,
+) -> None:
+    """Queue a Telegram notification for a loop iteration or terminal event.
+
+    Args:
+        db: BridgeDB instance.
+        loop_id: The loop ID.
+        task_id: The completed task ID (string) — used to look up channel/chat_id.
+        result_summary: Task result summary (used for progress notifications).
+        terminal: True for final loop events, False for mid-loop progress.
+    """
+    from .telegram_loop import format_loop_progress, format_loop_done
+    from .message_db import MessageDB
+
+    # Get task for channel routing info
+    task_row = db.get_task(int(task_id))
+    if not task_row:
+        return
+    task = dict(task_row)
+
+    chat_id = task.get("channel_chat_id")
+    channel = task.get("channel", "cli")
+    if not chat_id or channel == "cli":
+        return
+
+    # Get refreshed loop state (ensures latest total_cost_usd / finish_reason)
+    loop = db.get_loop(loop_id)
+    if not loop:
+        return
+
+    agent = loop.get("agent", "")
+    goal = loop.get("goal", "")
+    iteration_num = loop.get("current_iteration", 1)
+    max_iterations = loop.get("max_iterations", 1)
+    total_cost = loop.get("total_cost_usd") or 0.0
+
+    if terminal:
+        finish_reason = loop.get("finish_reason") or ""
+        message = format_loop_done(
+            loop_id=loop_id,
+            agent=agent,
+            goal=goal,
+            iterations_completed=iteration_num,
+            total_cost_usd=total_cost,
+            duration_ms=None,
+            finish_reason=finish_reason,
+        )
+    else:
+        message = format_loop_progress(
+            loop_id=loop_id,
+            agent=agent,
+            goal=goal,
+            iteration_num=iteration_num,
+            max_iterations=max_iterations,
+            result_summary=result_summary,
+            done=False,
+            cost_usd=total_cost,
+        )
+
+    try:
+        msg_db = MessageDB()
+        try:
+            msg_db.create_outbound(channel, chat_id, message, source="loop")
+        finally:
+            msg_db.close()
+    except Exception:
+        print(f"[loop] Failed to send loop notification for {loop_id}", file=sys.stderr)
+
+
 # ── Dispatch ───────────────────────────────────────────────────────────────────
 
 def _dispatch_iteration(
@@ -649,6 +723,7 @@ def on_task_complete(
             finished_at=finished_at,
             finish_reason=f"cost_limit_exceeded: {cost_reason}",
         )
+        _send_loop_notification(db, loop_id, task_id, result_summary, terminal=True)
         return
 
     current_iteration = loop["current_iteration"]
@@ -660,6 +735,7 @@ def on_task_complete(
             finished_at=finished_at,
             finish_reason="done_condition_met",
         )
+        _send_loop_notification(db, loop_id, task_id, result_summary, terminal=True)
         return
 
     # Update consecutive failures
@@ -678,6 +754,7 @@ def on_task_complete(
             finished_at=finished_at,
             finish_reason="max_consecutive_failures",
         )
+        _send_loop_notification(db, loop_id, task_id, result_summary, terminal=True)
         return
 
     # Check max_iterations
@@ -688,6 +765,7 @@ def on_task_complete(
             finished_at=finished_at,
             finish_reason="max_iterations",
         )
+        _send_loop_notification(db, loop_id, task_id, result_summary, terminal=True)
         return
 
     # Manual done condition: set pending_approval and notify user
@@ -699,6 +777,9 @@ def on_task_complete(
             return
     except ValueError:
         pass
+
+    # Progress notification before dispatching next iteration
+    _send_loop_notification(db, loop_id, task_id, result_summary, terminal=False)
 
     # Dispatch next iteration with feedback
     all_iterations = db.get_loop_iterations(loop_id)

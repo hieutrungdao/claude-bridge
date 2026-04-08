@@ -784,7 +784,7 @@ class BridgeDB:
     def get_loop_by_task_id(self, task_id: str) -> dict | None:
         """Find the loop that owns the given current_task_id. Returns dict or None."""
         row = self.conn.execute(
-            "SELECT * FROM loops WHERE current_task_id = ? AND status = 'running' LIMIT 1",
+            "SELECT * FROM loops WHERE current_task_id = ? LIMIT 1",
             (task_id,),
         ).fetchone()
         return dict(row) if row else None

@@ -19,6 +19,52 @@ from .session import derive_agent_file_name
 DEFAULT_TIMEOUT_MINUTES = 360
 
 
+def _format_loop_task_notification(db: BridgeDB, task: dict) -> str | None:
+    """Format a loop task notification using loop-specific formatters.
+
+    Returns None if the owning loop cannot be found (caller should fall back
+    to the generic format_completion_message).
+    """
+    from .telegram_loop import format_loop_progress, format_loop_done
+
+    task_id = str(task["id"])
+    loop = db.get_loop_by_task_id(task_id)
+    if not loop:
+        return None
+
+    loop_id = loop["loop_id"]
+    agent = loop.get("agent", "")
+    goal = loop.get("goal", "")
+    iteration_num = loop.get("current_iteration", 1)
+    max_iterations = loop.get("max_iterations", 1)
+    total_cost = loop.get("total_cost_usd") or 0.0
+    status = loop.get("status", "running")
+
+    if status in ("done", "failed", "cancelled"):
+        finish_reason = loop.get("finish_reason") or ""
+        return format_loop_done(
+            loop_id=loop_id,
+            agent=agent,
+            goal=goal,
+            iterations_completed=iteration_num,
+            total_cost_usd=total_cost,
+            duration_ms=None,
+            finish_reason=finish_reason,
+        )
+
+    result_summary = task.get("result_summary") or ""
+    return format_loop_progress(
+        loop_id=loop_id,
+        agent=agent,
+        goal=goal,
+        iteration_num=iteration_num,
+        max_iterations=max_iterations,
+        result_summary=result_summary,
+        done=False,
+        cost_usd=total_cost,
+    )
+
+
 def _repair_incomplete_done_tasks(db: BridgeDB) -> None:
     """Re-parse result files for done tasks that have no summary/cost data.
 
@@ -205,7 +251,10 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                     if not msg_db.has_notification_for_task(task["id"]):
                         agent = db.get_agent_by_session(task["session_id"])
                         agent_name = agent["name"] if agent else task["session_id"]
-                        message = format_completion_message(task, agent_name)
+                        if task["task_type"] == "loop":
+                            message = _format_loop_task_notification(db, task) or format_completion_message(task, agent_name)
+                        else:
+                            message = format_completion_message(task, agent_name)
                         msg_db.create_outbound(
                             task["channel"], task["channel_chat_id"],
                             message, source="notification", task_id=task["id"],
