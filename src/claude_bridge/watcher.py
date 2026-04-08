@@ -177,11 +177,15 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
         _repair_incomplete_done_tasks(db)
 
         # Report unreported completions + queue notifications
+        from datetime import datetime, timezone, timedelta
         from .notify import format_completion_message
 
         msg_db = MessageDB()
         try:
             unreported = db.get_unreported_tasks()
+            # Only notify for tasks completed within the last hour
+            age_cutoff = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+
             for task in unreported:
                 if task["status"] == "done":
                     print(f"✓ Task #{task['id']} ({task['session_id']}) — done")
@@ -194,8 +198,10 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                 elif task["status"] == "timeout":
                     print(f"⏱ Task #{task['id']} ({task['session_id']}) — timed out")
 
-                # Queue notification via outbound messages (dedup: skip if already queued)
-                if task["channel"] != "cli" and task["channel_chat_id"]:
+                # Queue notification via outbound messages (dedup + age check)
+                completed_at = task.get("completed_at") or ""
+                is_recent = completed_at >= age_cutoff if completed_at else False
+                if task["channel"] != "cli" and task["channel_chat_id"] and is_recent:
                     if not msg_db.has_notification_for_task(task["id"]):
                         agent = db.get_agent_by_session(task["session_id"])
                         agent_name = agent["name"] if agent else task["session_id"]
@@ -204,6 +210,8 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                             task["channel"], task["channel_chat_id"],
                             message, source="notification", task_id=task["id"],
                         )
+                elif not is_recent and task["channel"] != "cli":
+                    print(f"[watcher] skipping stale notification for task #{task['id']} (completed_at={completed_at})")
 
                 db.mark_task_reported(task["id"])
         finally:

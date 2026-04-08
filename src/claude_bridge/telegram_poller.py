@@ -139,12 +139,15 @@ def _strip_html(html: str) -> str:
     return text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
 
 
-def telegram_send_message(token: str, chat_id: str, text: str) -> bool:
-    """Send a message via Telegram Bot API with HTML formatting (markdown converted)."""
+def telegram_send_message(token: str, chat_id: str, text: str) -> bool | int:
+    """Send a message via Telegram Bot API with HTML formatting (markdown converted).
+
+    Returns True on success, False on error, or an int (retry_after seconds) on rate limit.
+    """
     url = f"https://api.telegram.org/bot{token}/sendMessage"
     html = markdown_to_telegram_html(text)
 
-    def _post(body: dict) -> bool:
+    def _post(body: dict) -> bool | int:
         payload = json.dumps(body).encode()
         req = Request(url, data=payload, headers={"Content-Type": "application/json"})
         try:
@@ -152,11 +155,22 @@ def telegram_send_message(token: str, chat_id: str, text: str) -> bool:
                 result = json.loads(resp.read())
                 return result.get("ok", False)
         except Exception as e:
+            # Check for 429 rate limit
+            if hasattr(e, "code") and e.code == 429:
+                try:
+                    error_body = json.loads(e.read())
+                    retry_after = error_body.get("parameters", {}).get("retry_after", 30)
+                    print(f"[poller] rate limited, retry after {retry_after}s", file=sys.stderr)
+                    return retry_after
+                except Exception:
+                    return 30  # default backoff
             print(f"[poller] sendMessage error: {e}", file=sys.stderr)
             return False
 
-    success = _post({"chat_id": chat_id, "text": html, "parse_mode": "HTML"})
-    if not success:
+    result = _post({"chat_id": chat_id, "text": html, "parse_mode": "HTML"})
+    if isinstance(result, int):
+        return result  # rate limit
+    if not result:
         # Fallback: plain text if Telegram rejects HTML
         print("[poller] HTML parse failed, falling back to plain text", file=sys.stderr)
         return _post({"chat_id": chat_id, "text": _strip_html(html)})
@@ -238,13 +252,21 @@ class TelegramPoller:
             else:
                 self.msg_db.increment_inbound_retry(msg["id"])
 
-        # Send pending outbound
+        # Send pending outbound (max 5 per cycle to avoid rate limits)
         pending = self.msg_db.get_pending_outbound()
-        for msg in pending:
-            success = telegram_send_message(self.token, msg["chat_id"], msg["message_text"])
-            if success:
+        for msg in pending[:5]:
+            result = telegram_send_message(self.token, msg["chat_id"], msg["message_text"])
+            if result is True:
                 self.msg_db.mark_outbound_sent(msg["id"])
+            elif isinstance(result, int):
+                # Rate limited — stop sending, sleep for retry_after
+                print(f"[poller] backing off {result}s due to rate limit", file=sys.stderr)
+                time.sleep(result)
+                break
             else:
                 self.msg_db.increment_outbound_retry(msg["id"])
                 if msg["retry_count"] + 1 >= msg["max_retries"]:
                     self.msg_db.mark_outbound_failed(msg["id"])
+
+        # Cleanup old sent/failed outbound messages (older than 24h)
+        self.msg_db.cleanup_old_outbound(max_age_hours=24)

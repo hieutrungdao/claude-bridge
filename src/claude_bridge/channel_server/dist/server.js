@@ -18791,7 +18791,7 @@ var AssertObjectSchema = custom((v) => v !== null && (typeof v === "object" || t
 var ProgressTokenSchema = union([string2(), number2().int()]);
 var CursorSchema = string2();
 var TaskCreationParamsSchema = looseObject({
-  ttl: number2().optional(),
+  ttl: union([number2(), _null3()]).optional(),
   pollInterval: number2().optional()
 });
 var TaskMetadataSchema = object2({
@@ -18945,8 +18945,7 @@ var ClientCapabilitiesSchema = object2({
   roots: object2({
     listChanged: boolean2().optional()
   }).optional(),
-  tasks: ClientTasksCapabilitySchema.optional(),
-  extensions: record(string2(), AssertObjectSchema).optional()
+  tasks: ClientTasksCapabilitySchema.optional()
 });
 var InitializeRequestParamsSchema = BaseRequestParamsSchema.extend({
   protocolVersion: string2(),
@@ -18971,8 +18970,7 @@ var ServerCapabilitiesSchema = object2({
   tools: object2({
     listChanged: boolean2().optional()
   }).optional(),
-  tasks: ServerTasksCapabilitySchema.optional(),
-  extensions: record(string2(), AssertObjectSchema).optional()
+  tasks: ServerTasksCapabilitySchema.optional()
 });
 var InitializeResultSchema = ResultSchema.extend({
   protocolVersion: string2(),
@@ -19087,7 +19085,6 @@ var ResourceSchema = object2({
   uri: string2(),
   description: optional(string2()),
   mimeType: optional(string2()),
-  size: optional(number2()),
   annotations: AnnotationsSchema.optional(),
   _meta: optional(looseObject({}))
 });
@@ -21072,7 +21069,7 @@ var AssertObjectSchema2 = custom((v) => v !== null && (typeof v === "object" || 
 var ProgressTokenSchema2 = union([string2(), number2().int()]);
 var CursorSchema2 = string2();
 var TaskCreationParamsSchema2 = looseObject({
-  ttl: number2().optional(),
+  ttl: union([number2(), _null3()]).optional(),
   pollInterval: number2().optional()
 });
 var TaskMetadataSchema2 = object2({
@@ -21221,8 +21218,7 @@ var ClientCapabilitiesSchema2 = object2({
   roots: object2({
     listChanged: boolean2().optional()
   }).optional(),
-  tasks: ClientTasksCapabilitySchema2.optional(),
-  extensions: record(string2(), AssertObjectSchema2).optional()
+  tasks: ClientTasksCapabilitySchema2.optional()
 });
 var InitializeRequestParamsSchema2 = BaseRequestParamsSchema2.extend({
   protocolVersion: string2(),
@@ -21247,8 +21243,7 @@ var ServerCapabilitiesSchema2 = object2({
   tools: object2({
     listChanged: boolean2().optional()
   }).optional(),
-  tasks: ServerTasksCapabilitySchema2.optional(),
-  extensions: record(string2(), AssertObjectSchema2).optional()
+  tasks: ServerTasksCapabilitySchema2.optional()
 });
 var InitializeResultSchema2 = ResultSchema2.extend({
   protocolVersion: string2(),
@@ -21363,7 +21358,6 @@ var ResourceSchema2 = object2({
   uri: string2(),
   description: optional(string2()),
   mimeType: optional(string2()),
-  size: optional(number2()),
   annotations: AnnotationsSchema2.optional(),
   _meta: optional(looseObject({}))
 });

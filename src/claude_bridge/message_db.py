@@ -238,6 +238,15 @@ class MessageDB:
         )
         self.conn.commit()
 
+    def cleanup_old_outbound(self, max_age_hours: int = 24):
+        """Delete sent/failed outbound messages older than max_age_hours."""
+        cutoff = _utcnow_offset(-max_age_hours * 3600)
+        self.conn.execute(
+            "DELETE FROM outbound_messages WHERE status IN ('sent', 'failed') AND created_at < ?",
+            (cutoff,),
+        )
+        self.conn.commit()
+
     # --- Poller State ---
 
     def get_state(self, key: str) -> str | None:
