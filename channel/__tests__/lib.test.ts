@@ -69,6 +69,22 @@ describe("loadAllowlist", () => {
     expect(loadAllowlist(path)).toEqual([]);
     rmSync(dir, { recursive: true });
   });
+
+  test("returns allowFrom array from config.json when present", () => {
+    const dir = tmpDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ telegram_chat_id: "111", allowFrom: ["222", "333"] }));
+    expect(loadAllowlist(path)).toEqual(["222", "333"]);
+    rmSync(dir, { recursive: true });
+  });
+
+  test("falls back to telegram_chat_id when allowFrom absent", () => {
+    const dir = tmpDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ telegram_chat_id: "999" }));
+    expect(loadAllowlist(path)).toEqual(["999"]);
+    rmSync(dir, { recursive: true });
+  });
 });
 
 describe("isAllowed", () => {

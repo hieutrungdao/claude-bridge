@@ -67,11 +67,15 @@ export function initInboundTracking(db: Database): void {
 export function loadAllowlist(configPath: string): string[] {
   try {
     const data = JSON.parse(readFileSync(configPath, "utf8"));
-    // Support both config.json format (telegram_chat_id) and legacy access.json (allowFrom)
+    // allowFrom takes precedence (explicit multi-user list)
+    if (data.allowFrom && data.allowFrom.length > 0) {
+      return data.allowFrom.map(String);
+    }
+    // Fall back to telegram_chat_id (single-user setup)
     if (data.telegram_chat_id) {
       return [String(data.telegram_chat_id)];
     }
-    return data.allowFrom ?? [];
+    return [];
   } catch {
     return [];
   }
