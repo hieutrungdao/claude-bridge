@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from .db import BridgeDB
 from .dispatcher import pid_alive, kill_process, spawn_task, get_result_file
@@ -223,7 +223,6 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
         _repair_incomplete_done_tasks(db)
 
         # Report unreported completions + queue notifications
-        from datetime import datetime, timezone, timedelta
         from .notify import format_completion_message
 
         msg_db = MessageDB()
@@ -245,7 +244,7 @@ def watch(timeout_minutes: int = DEFAULT_TIMEOUT_MINUTES, db: BridgeDB | None = 
                     print(f"⏱ Task #{task['id']} ({task['session_id']}) — timed out")
 
                 # Queue notification via outbound messages (dedup + age check)
-                completed_at = task.get("completed_at") or ""
+                completed_at = task["completed_at"] or ""
                 is_recent = completed_at >= age_cutoff if completed_at else False
                 if task["channel"] != "cli" and task["channel_chat_id"] and is_recent:
                     if not msg_db.has_notification_for_task(task["id"]):
