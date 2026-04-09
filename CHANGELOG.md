@@ -6,6 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.5.8] — 2026-04-09
+
+### Fixed
+
+- **Notification channel resolution for loop tasks** — `on_complete.py` now correctly
+  resolves the notification channel when dispatching loop task completions, ensuring
+  Telegram notifications reach the right chat.
+- **`allowFrom` array handling in channel server** — `loadAllowlist()` in
+  `channel/server.ts` now correctly handles `allowFrom` as an array, fixing
+  multi-user setups where multiple chat IDs are allowed.
+- **Loop notifications on task completion** — added proactive loop notification path
+  in `loop_orchestrator.py` via `_send_loop_notification()` helper that queues
+  loop-formatted Telegram messages at every completion point (cost exceeded, done
+  condition met, max iterations, max consecutive failures, and progress updates).
+  Watcher fallback also gains loop-aware formatting via `_format_loop_task_notification()`.
+  Anti-duplicate guard prevents double-sending between proactive and watcher paths.
+- **`get_loop_by_task_id()` status filter** — removed `AND status='running'` constraint
+  so watcher fallback can find loops in any status (was missing terminal loops).
+
+---
+
+## [0.5.7] — 2026-04-08
+
+### Fixed
+
+- **Telegram rate limit handling** — `telegram_send_message()` now returns `retry_after`
+  on HTTP 429 instead of `False`, allowing the poller to back off for the correct duration.
+- **Outbound message batch throttling** — poller sends max 5 outbound messages per cycle
+  to avoid burst rate limits from Telegram API.
+- **Stale notification cleanup** — added `cleanup_old_outbound()` to purge stale
+  sent/failed messages from the outbound queue. Watcher now skips notifications for
+  tasks completed more than 1 hour ago.
+
+---
+
+## [0.5.6] — 2026-04-08
+
+### Fixed
+
+- **Watcher result summary truncation** — increased `result_summary` limit from 500 to
+  2000 characters in watcher's repair and missed-hook paths, preventing loss of important
+  information in completion notifications.
+
+---
+
 ## [0.5.5] — 2026-04-07
 
 ### Fixed
