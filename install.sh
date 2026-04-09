@@ -175,23 +175,84 @@ fi
 # (covers both fresh installs and systems where bun exists but PATH isn't yet updated)
 export PATH="$HOME/.bun/bin:$PATH"
 
-# ── Check: tmux (optional, needed for 'bridge start') ────────────────────────
+# ── System package installer (sudo prompt once) ───────────────────────────────
+
+# Tracks whether user already gave sudo consent this run
+_SUDO_GRANTED=""
+
+# Ask for sudo consent once, then install packages.
+# Usage: _install_sys_pkgs tmux pipx
+_install_sys_pkgs() {
+  # Ask once per script run
+  if [ -z "$_SUDO_GRANTED" ]; then
+    printf "${YELLOW}[claude-bridge]${NC} ⚠ System packages need to be installed (%s).\n" "$*"
+    printf "${YELLOW}[claude-bridge]${NC}   This requires sudo. Proceed? [y/N] " >&2
+    read -r _answer </dev/tty
+    case "$_answer" in
+      [Yy]|[Yy][Ee][Ss]) _SUDO_GRANTED=1 ;;
+      *)
+        warn "Skipping system package install. Some features may not work."
+        return 1
+        ;;
+    esac
+  fi
+
+  case "$OS" in
+    macos)
+      command -v brew >/dev/null 2>&1 || fail "Homebrew not found. Install from https://brew.sh then rerun."
+      brew install "$@" || return 1
+      ;;
+    linux|wsl)
+      case "${LINUX_PKG:-unknown}" in
+        apt)
+          sudo apt-get update -qq
+          sudo apt-get install -y "$@" || return 1
+          ;;
+        dnf)
+          sudo dnf install -y "$@" || return 1
+          ;;
+        pacman)
+          # pipx is named python-pipx on Arch
+          _pacman_pkgs=""
+          for _p in "$@"; do
+            if [ "$_p" = "pipx" ]; then
+              _pacman_pkgs="$_pacman_pkgs python-pipx"
+            else
+              _pacman_pkgs="$_pacman_pkgs $_p"
+            fi
+          done
+          # shellcheck disable=SC2086
+          sudo pacman -S --noconfirm $_pacman_pkgs || return 1
+          ;;
+        zypper)
+          sudo zypper install -y "$@" || return 1
+          ;;
+        *)
+          warn "Unknown package manager — install manually: $*"
+          return 1
+          ;;
+      esac
+      ;;
+    *)
+      warn "Unknown OS — install manually: $*"
+      return 1
+      ;;
+  esac
+}
+
+# ── Check/Install: tmux ───────────────────────────────────────────────────────
 
 if command -v tmux >/dev/null 2>&1; then
   success "tmux $(tmux -V | cut -d' ' -f2)"
 else
-  warn "tmux not found — 'bridge start' won't work without it."
-  case "$OS" in
-    macos) warn "  Install: brew install tmux" ;;
-    linux|wsl)
-      case "${LINUX_PKG:-unknown}" in
-        apt)    warn "  Install: sudo apt install tmux" ;;
-        dnf)    warn "  Install: sudo dnf install tmux" ;;
-        pacman) warn "  Install: sudo pacman -S tmux" ;;
-        zypper) warn "  Install: sudo zypper install tmux" ;;
-        *)      warn "  Install tmux via your package manager" ;;
-      esac ;;
-  esac
+  warn "tmux not found — required for 'bridge start'."
+  if _install_sys_pkgs tmux; then
+    if command -v tmux >/dev/null 2>&1; then
+      success "tmux $(tmux -V | cut -d' ' -f2) installed"
+    else
+      warn "tmux install may need a shell restart."
+    fi
+  fi
 fi
 
 # ── Clone or update repo ──────────────────────────────────────────────────────
@@ -233,6 +294,42 @@ if [ -f "$BUNDLE" ]; then
   success "Channel server built (${BUNDLE_SIZE} bytes)"
 else
   fail "Build succeeded but $BUNDLE not found. Check package.json build script."
+fi
+
+# ── Check/Install: pipx ──────────────────────────────────────────────────────
+
+if ! command -v pipx >/dev/null 2>&1; then
+  warn "pipx not found — attempting to install (recommended for isolated install)..."
+  _pipx_installed=0
+
+  # Try OS package manager first
+  if _install_sys_pkgs pipx 2>/dev/null; then
+    # Reload PATH — pipx may land in /usr/bin or /usr/local/bin
+    export PATH="/usr/local/bin:/usr/bin:$PATH"
+    command -v pipx >/dev/null 2>&1 && _pipx_installed=1
+  fi
+
+  # Fallback: pip install --user pipx
+  if [ "$_pipx_installed" = "0" ]; then
+    python3 -m pip install --user pipx --quiet 2>/dev/null \
+      || python3 -m pip install --user pipx --break-system-packages --quiet 2>/dev/null \
+      || true
+    export PATH="$HOME/.local/bin:$PATH"
+    command -v pipx >/dev/null 2>&1 && _pipx_installed=1
+  fi
+
+  if [ "$_pipx_installed" = "1" ]; then
+    success "pipx $(pipx --version) installed"
+    # Ensure pipx bin dir is on PATH
+    pipx ensurepath --quiet 2>/dev/null || true
+    export PATH="$HOME/.local/bin:$PATH"
+  else
+    warn "Could not install pipx — will fall back to pip."
+  fi
+fi
+
+if command -v pipx >/dev/null 2>&1; then
+  success "pipx $(pipx --version 2>/dev/null || echo 'found')"
 fi
 
 # ── Install bridge-cli ────────────────────────────────────────────────────────

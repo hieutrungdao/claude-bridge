@@ -84,7 +84,7 @@ Stop hook → on_complete.py         Updates SQLite, queues notification
 curl -fsSL https://raw.githubusercontent.com/hieutrtr/claude-bridge/main/install.sh | sh
 ```
 
-One command: checks prerequisites, installs Bun (if needed), clones the repo, builds the channel server, and installs `bridge-cli`. Then run the setup wizard:
+One command: checks prerequisites, auto-installs missing system dependencies (tmux, pipx, Bun), clones the repo, builds the channel server, and installs `bridge-cli`. Then run the setup wizard:
 
 ```bash
 bridge-cli setup

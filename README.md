@@ -84,7 +84,7 @@ Stop hook → on_complete.py         Cập nhật SQLite, xếp hàng thông bá
 curl -fsSL https://raw.githubusercontent.com/hieutrtr/claude-bridge/main/install.sh | sh
 ```
 
-Một lệnh duy nhất: kiểm tra prerequisites, cài Bun (nếu cần), clone repo, build channel server, và cài `bridge-cli`. Sau đó chạy wizard thiết lập:
+Một lệnh duy nhất: kiểm tra prerequisites, tự động cài các dependency hệ thống còn thiếu (tmux, pipx, Bun), clone repo, build channel server, và cài `bridge-cli`. Sau đó chạy wizard thiết lập:
 
 ```bash
 bridge-cli setup
