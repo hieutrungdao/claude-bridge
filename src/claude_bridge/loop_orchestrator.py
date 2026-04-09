@@ -585,11 +585,17 @@ def _dispatch_iteration(
     agent_file_name = derive_agent_file_name(session_id)
     model = agent_record["model"] or "sonnet"
 
+    # Resolve notification channel for this task
+    from .notify import get_default_channel
+    channel, channel_chat_id = get_default_channel()
+
     # Create task record
     task_id = db.create_task(
         session_id=session_id,
         prompt=prompt,
         task_type="loop",
+        channel=channel,
+        channel_chat_id=channel_chat_id,
     )
     result_file = get_result_file(session_id, task_id)
 
