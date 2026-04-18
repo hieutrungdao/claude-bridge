@@ -221,6 +221,7 @@ def collect_sources(
 def ingest(
     agent_filter: str | None = None,
     db: "BridgeDB | None" = None,
+    source_filter=None,
 ) -> IngestResult:
     """Run one ingest: collect sources, synthesize via claude -p, log the run.
 
@@ -228,6 +229,10 @@ def ingest(
     advanced past the last successful ingest's recorded mtime. Failure
     runs (non-zero exit from claude) still write a row so the operation
     is auditable.
+
+    `source_filter` is an optional callable applied after collection.
+    It receives the raw SourceRecord list and returns the filtered list.
+    Used by the CLI to honor `.bridgewiki-ignore`.
     """
     from .db import BridgeDB
 
@@ -237,6 +242,9 @@ def ingest(
 
     try:
         sources = collect_sources(agent_filter=agent_filter, db=db)
+
+        if source_filter is not None:
+            sources = source_filter(sources)
 
         if not sources:
             return _empty_result(skipped=True)
