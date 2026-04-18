@@ -372,6 +372,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="narrow to a single agent")
     wp.add_argument("--dry-run", action="store_true",
                     help="preview without invoking claude")
+    wq = wsub.add_parser("query", help="Answer a question from the wiki")
+    wq.add_argument("question", help="the question (quote for multi-word)")
+    wq.add_argument("--top-k", type=int, default=5, metavar="N",
+                    help="retrieve top N candidate pages (default 5)")
+    wq.add_argument("--json", action="store_true", dest="json_out",
+                    help="emit machine-readable JSON")
 
     # daemon
     d = sub.add_parser("daemon", help="Manage system service (systemd/launchd)")
@@ -2011,8 +2017,47 @@ def _cmd_wiki(args) -> int:
     wiki_cmd = getattr(args, "wiki_cmd", None)
     if wiki_cmd == "ingest":
         return _cmd_wiki_ingest(args)
+    if wiki_cmd == "query":
+        return _cmd_wiki_query(args)
     print(f"Error: unknown wiki subcommand: {wiki_cmd}", file=sys.stderr)
     return 1
+
+
+def _cmd_wiki_query(args) -> int:
+    import json as _json
+    from . import wiki as wiki_mod
+
+    result = wiki_mod.query(args.question, top_k=args.top_k)
+
+    if args.json_out:
+        payload = {
+            "answer": result["answer"],
+            "sources_cited": result["sources_cited"],
+            "pages_retrieved": result["pages_retrieved"],
+            "cost_usd": result["cost_usd"],
+            "duration_ms": result["duration_ms"],
+            "empty": result["empty"],
+            "exit_code": result["exit_code"],
+        }
+        print(_json.dumps(payload, indent=2))
+        return result["exit_code"]
+
+    if result["exit_code"] != 0:
+        print(f"[query] Failed — exit {result['exit_code']}", file=sys.stderr)
+        if result["stderr"]:
+            print(result["stderr"], file=sys.stderr)
+        return result["exit_code"]
+
+    print(result["answer"])
+    print()
+    if result["sources_cited"]:
+        print(f"Sources: {', '.join(result['sources_cited'])}")
+    print(
+        f"Cost: ${result['cost_usd']:.4f}  "
+        f"Duration: {result['duration_ms']}ms  "
+        f"Retrieved: {len(result['pages_retrieved'])} page(s)"
+    )
+    return 0
 
 
 def _filter_bridgewiki_ignored(sources: list) -> tuple[list, list[str]]:

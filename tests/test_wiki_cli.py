@@ -290,3 +290,116 @@ class TestWikiIngestFailure:
         assert code == 2
         assert "Failed" in captured.err or "failed" in captured.err.lower()
         assert "exploded" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# M25.T3 — `bridge-cli wiki query`
+# ---------------------------------------------------------------------------
+
+
+def _seed_wiki_page(home, name, content):
+    (home / name).write_text(content, encoding="utf-8")
+
+
+class TestWikiQueryParser:
+    def test_wiki_help_lists_query(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        code = _run_cli(["wiki", "--help"], monkeypatch)
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "query" in captured.out
+
+    def test_wiki_query_help_lists_flags(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        code = _run_cli(["wiki", "query", "--help"], monkeypatch)
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "--top-k" in captured.out
+        assert "--json" in captured.out
+
+
+class TestWikiQueryEmptyWiki:
+    def test_empty_wiki_exits_zero_with_message(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.wiki import wiki_home
+        wiki_home()
+
+        calls: list = []
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0, "{}", "")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        code = _run_cli(["wiki", "query", "what is X?"], monkeypatch)
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "wiki" in captured.out.lower()
+        assert calls == []
+
+
+class TestWikiQueryHappyPath:
+    def test_text_output_has_answer_sources_cost(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.wiki import wiki_home
+        home = wiki_home()
+        _seed_wiki_page(home, "api.md",
+                        "# API\n\n## Rate Limiting\n\n60rpm per key.\n")
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout='{"total_cost_usd": 0.04, "duration_ms": 900, '
+                       '"result": "Token bucket at 60rpm [Source: api.md]."}',
+                stderr="",
+            )
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        code = _run_cli(["wiki", "query", "rate limiting"], monkeypatch)
+        captured = capsys.readouterr()
+        assert code == 0
+        assert "Token bucket" in captured.out
+        assert "Sources:" in captured.out
+        assert "api.md" in captured.out
+        assert "Cost:" in captured.out or "$0.04" in captured.out
+
+    def test_json_flag_emits_machine_readable(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.wiki import wiki_home
+        home = wiki_home()
+        _seed_wiki_page(home, "api.md",
+                        "# API\n\n## Rate Limiting\n\n60rpm per key.\n")
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout='{"total_cost_usd": 0.04, "duration_ms": 900, '
+                       '"result": "x [Source: api.md]"}',
+                stderr="",
+            )
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        code = _run_cli(["wiki", "query", "--json", "rate limiting"], monkeypatch)
+        captured = capsys.readouterr()
+        import json as _json
+        payload = _json.loads(captured.out)
+        assert payload["answer"]
+        assert "api.md" in payload["sources_cited"]
+        assert "pages_retrieved" in payload
+
+
+class TestWikiQueryFailure:
+    def test_non_zero_exit_propagates(self, tmp_path, monkeypatch, capsys):
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.wiki import wiki_home
+        home = wiki_home()
+        _seed_wiki_page(home, "api.md",
+                        "# API\n\n## Rate Limiting\n\n60rpm per key.\n")
+
+        def fake_run(cmd, **kwargs):
+            return subprocess.CompletedProcess(cmd, 2, "", "boom")
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        code = _run_cli(["wiki", "query", "rate limiting"], monkeypatch)
+        captured = capsys.readouterr()
+        assert code == 2
+        assert "boom" in captured.err or "Failed" in captured.err
