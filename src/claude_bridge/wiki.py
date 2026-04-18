@@ -58,6 +58,19 @@ class RetrievedPage(TypedDict):
     excerpt: str
 
 
+class QueryResult(TypedDict):
+    """Outcome of one `query()` call."""
+
+    answer: str
+    sources_cited: list[str]
+    pages_retrieved: list[str]
+    cost_usd: float
+    duration_ms: int
+    exit_code: int
+    stderr: str
+    empty: bool
+
+
 _OPERATIONAL_PAGES = frozenset({"schema.md", "index.md", "log.md"})
 
 _STOPWORDS = frozenset({
@@ -184,6 +197,11 @@ def _load_schema_template() -> str:
 def _load_ingest_template() -> str:
     """Load the static portion of the ingest prompt (consumed by M24.T2)."""
     return _load_template("wiki_ingest.md")
+
+
+def _load_query_template() -> str:
+    """Load the static portion of the query prompt (consumed by M25.T2)."""
+    return _load_template("wiki_query.md")
 
 
 def collect_sources(
@@ -571,6 +589,142 @@ def _pick_excerpt(
         break
     pieces = [p for p in (title_line, first_body) if p]
     return "\n".join(pieces)
+
+
+_CITATION_RE = re.compile(r"\[Source:\s*([^\]]+?\.md)\s*\]")
+
+
+def query(
+    question: str,
+    top_k: int = 5,
+    db: "BridgeDB | None" = None,
+) -> QueryResult:
+    """Answer a question from wiki content, with inline citations.
+
+    Pipeline: retrieve → assemble prompt → `claude -p` → parse answer +
+    citations. Logs to `wiki_operations` with operation='QUERY'. When no
+    pages match the question, returns a helpful empty-state answer
+    without invoking the subprocess.
+    """
+    from .db import BridgeDB
+
+    pages = retrieve(question, top_k=top_k)
+    if not pages:
+        return {
+            "answer": (
+                "The wiki does not yet contain an answer to this question. "
+                "Run `bridge-cli wiki ingest` to synthesize agent memories."
+            ),
+            "sources_cited": [],
+            "pages_retrieved": [],
+            "cost_usd": 0.0,
+            "duration_ms": 0,
+            "exit_code": 0,
+            "stderr": "",
+            "empty": True,
+        }
+
+    owned_db = db is None
+    if db is None:
+        db = BridgeDB()
+
+    try:
+        home = wiki_home()
+        prompt = _assemble_query_prompt(question, pages)
+        cmd = [
+            "claude",
+            "-p", prompt,
+            "--output-format", "json",
+            "--dangerously-skip-permissions",
+        ]
+
+        t0 = time.time()
+        completed = subprocess.run(
+            cmd,
+            cwd=str(home),
+            capture_output=True,
+            text=True,
+            timeout=300,
+        )
+        wall_ms = int((time.time() - t0) * 1000)
+
+        answer, cost_usd, reported_ms = _parse_claude_query_json(completed.stdout)
+        duration_ms = reported_ms or wall_ms
+        sources_cited = _extract_citations(answer)
+
+        _record_operation(
+            db,
+            operation="QUERY",
+            duration_ms=duration_ms,
+            cost_usd=cost_usd,
+            sources_count=len(pages),
+            pages_changed=[],  # query is read-only
+            agent_filter=None,
+            exit_code=completed.returncode,
+            stderr=completed.stderr or "",
+            last_source_mtime=0.0,  # unused for QUERY
+        )
+
+        return {
+            "answer": answer if completed.returncode == 0 else "",
+            "sources_cited": sources_cited,
+            "pages_retrieved": [p["path"] for p in pages],
+            "cost_usd": cost_usd,
+            "duration_ms": duration_ms,
+            "exit_code": completed.returncode,
+            "stderr": completed.stderr or "",
+            "empty": False,
+        }
+    finally:
+        if owned_db:
+            db.close()
+
+
+def _assemble_query_prompt(question: str, pages: list[RetrievedPage]) -> str:
+    """Build the full query prompt: static template + runtime context."""
+    template = _load_query_template()
+    home = wiki_home()
+
+    page_blocks: list[str] = []
+    for p in pages:
+        full = (home / p["path"]).read_text(encoding="utf-8")
+        page_blocks.append(f"### {p['path']}\n```\n{full}\n```")
+
+    pages_section = "\n\n".join(page_blocks)
+
+    return (
+        f"{template}\n\n---\n\n"
+        f"## Question\n\n{question}\n\n"
+        f"## Retrieved Pages\n\n{pages_section}\n\n"
+        f"---\n\n"
+        f"Answer now. Remember: inline [Source: filename.md] citations required.\n"
+    )
+
+
+def _parse_claude_query_json(stdout: str) -> tuple[str, float, int]:
+    """Extract (answer, cost_usd, duration_ms) from claude -p JSON stdout."""
+    if not stdout:
+        return "", 0.0, 0
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return stdout, 0.0, 0
+    answer = str(payload.get("result", "") or "")
+    cost = float(payload.get("total_cost_usd", 0.0) or 0.0)
+    duration = int(payload.get("duration_ms", 0) or 0)
+    return answer, cost, duration
+
+
+def _extract_citations(answer: str) -> list[str]:
+    """Return unique [Source: foo.md] filenames, preserving first-occurrence order."""
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for match in _CITATION_RE.findall(answer):
+        name = match.strip()
+        if name not in seen:
+            seen.add(name)
+            ordered.append(name)
+    return ordered
 
 
 def _first_n_nonempty(lines: list[str], n: int) -> str:
