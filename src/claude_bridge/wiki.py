@@ -7,7 +7,10 @@ these helpers and must never write outside `wiki_home()`.
 
 from __future__ import annotations
 
+import json
 import os
+import subprocess
+import time
 from datetime import date
 from importlib import resources
 from pathlib import Path
@@ -31,6 +34,18 @@ class SourceRecord(TypedDict):
     main_memory: str
     topics: list[dict]
     source_mtime: float | None
+
+
+class IngestResult(TypedDict):
+    """Outcome of one `ingest()` call."""
+
+    skipped: bool
+    sources_count: int
+    pages_changed: list[str]
+    cost_usd: float
+    duration_ms: int
+    exit_code: int
+    stderr: str
 
 
 _INDEX_TEMPLATE = """\
@@ -201,6 +216,211 @@ def collect_sources(
             }
         )
     return records
+
+
+def ingest(
+    agent_filter: str | None = None,
+    db: "BridgeDB | None" = None,
+) -> IngestResult:
+    """Run one ingest: collect sources, synthesize via claude -p, log the run.
+
+    Skipped (no subprocess, no row) when the max source mtime has not
+    advanced past the last successful ingest's recorded mtime. Failure
+    runs (non-zero exit from claude) still write a row so the operation
+    is auditable.
+    """
+    from .db import BridgeDB
+
+    owned_db = db is None
+    if db is None:
+        db = BridgeDB()
+
+    try:
+        sources = collect_sources(agent_filter=agent_filter, db=db)
+
+        if not sources:
+            return _empty_result(skipped=True)
+
+        current_max_mtime = max((s["source_mtime"] or 0.0) for s in sources)
+        last_mtime = _last_successful_source_mtime(db)
+        if last_mtime is not None and current_max_mtime <= last_mtime:
+            return _empty_result(skipped=True)
+
+        home = wiki_home()
+        pre_snapshot = _snapshot_wiki_files(home)
+
+        prompt = _assemble_ingest_prompt(sources)
+        cmd = [
+            "claude",
+            "-p", prompt,
+            "--output-format", "json",
+            "--dangerously-skip-permissions",
+        ]
+
+        t0 = time.time()
+        completed = subprocess.run(
+            cmd,
+            cwd=str(home),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        wall_duration_ms = int((time.time() - t0) * 1000)
+
+        cost_usd, reported_duration_ms = _parse_claude_json(completed.stdout)
+        duration_ms = reported_duration_ms or wall_duration_ms
+
+        post_snapshot = _snapshot_wiki_files(home)
+        pages_changed = _diff_snapshots(pre_snapshot, post_snapshot)
+
+        _record_operation(
+            db,
+            operation="INGEST",
+            duration_ms=duration_ms,
+            cost_usd=cost_usd,
+            sources_count=len(sources),
+            pages_changed=pages_changed,
+            agent_filter=agent_filter,
+            exit_code=completed.returncode,
+            stderr=completed.stderr,
+            last_source_mtime=current_max_mtime,
+        )
+
+        return {
+            "skipped": False,
+            "sources_count": len(sources),
+            "pages_changed": pages_changed,
+            "cost_usd": cost_usd,
+            "duration_ms": duration_ms,
+            "exit_code": completed.returncode,
+            "stderr": completed.stderr or "",
+        }
+    finally:
+        if owned_db:
+            db.close()
+
+
+def _empty_result(*, skipped: bool) -> IngestResult:
+    return {
+        "skipped": skipped,
+        "sources_count": 0,
+        "pages_changed": [],
+        "cost_usd": 0.0,
+        "duration_ms": 0,
+        "exit_code": 0,
+        "stderr": "",
+    }
+
+
+def _assemble_ingest_prompt(sources: list[SourceRecord]) -> str:
+    """Build the full ingest prompt: static template + runtime context."""
+    template = _load_ingest_template()
+    home = wiki_home()
+
+    schema_md = (home / "schema.md").read_text(encoding="utf-8")
+    index_md = (home / "index.md").read_text(encoding="utf-8")
+
+    entity_blocks: list[str] = []
+    for path in sorted(home.glob("*.md")):
+        if path.name in {"schema.md", "index.md", "log.md"}:
+            continue
+        body = path.read_text(encoding="utf-8").splitlines()[:120]
+        entity_blocks.append(f"### {path.name}\n```\n" + "\n".join(body) + "\n```")
+
+    entities_section = (
+        "\n\n".join(entity_blocks)
+        if entity_blocks
+        else "_No entity pages yet._"
+    )
+
+    sources_json = json.dumps(sources, indent=2, default=str)
+
+    return (
+        f"{template}\n\n---\n\n"
+        f"## Current Schema\n\n{schema_md}\n\n"
+        f"## Current Index\n\n{index_md}\n\n"
+        f"## Existing Entity Pages\n\n{entities_section}\n\n"
+        f"## New Sources\n\n```json\n{sources_json}\n```\n\n"
+        f"---\n\n"
+        f"Now synthesize. Begin by calling Read on any pages you need to update.\n"
+    )
+
+
+def _parse_claude_json(stdout: str) -> tuple[float, int]:
+    """Extract (cost_usd, duration_ms) from claude -p JSON stdout."""
+    if not stdout:
+        return 0.0, 0
+    try:
+        payload = json.loads(stdout)
+    except json.JSONDecodeError:
+        return 0.0, 0
+    cost = float(payload.get("total_cost_usd", 0.0) or 0.0)
+    duration = int(payload.get("duration_ms", 0) or 0)
+    return cost, duration
+
+
+def _snapshot_wiki_files(home: Path) -> dict[str, float]:
+    """Map wiki-relative .md paths to mtimes for change detection."""
+    snapshot: dict[str, float] = {}
+    for path in home.rglob("*.md"):
+        rel = str(path.relative_to(home))
+        snapshot[rel] = path.stat().st_mtime
+    return snapshot
+
+
+def _diff_snapshots(
+    pre: dict[str, float], post: dict[str, float]
+) -> list[str]:
+    """Return paths that were created or whose mtime advanced."""
+    changed: list[str] = []
+    for path, mtime in post.items():
+        if path not in pre or mtime > pre[path]:
+            changed.append(path)
+    return sorted(changed)
+
+
+def _last_successful_source_mtime(db: "BridgeDB") -> float | None:
+    row = db.conn.execute(
+        "SELECT MAX(last_source_mtime) AS m FROM wiki_operations "
+        "WHERE operation = 'INGEST' AND exit_code = 0"
+    ).fetchone()
+    if row is None:
+        return None
+    return row["m"]
+
+
+def _record_operation(
+    db: "BridgeDB",
+    *,
+    operation: str,
+    duration_ms: int,
+    cost_usd: float,
+    sources_count: int,
+    pages_changed: list[str],
+    agent_filter: str | None,
+    exit_code: int,
+    stderr: str,
+    last_source_mtime: float,
+) -> None:
+    db.conn.execute(
+        """INSERT INTO wiki_operations (
+               operation, duration_ms, cost_usd, sources_count,
+               pages_changed, agent_filter, exit_code, stderr,
+               last_source_mtime
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            operation,
+            duration_ms,
+            cost_usd,
+            sources_count,
+            json.dumps(pages_changed),
+            agent_filter,
+            exit_code,
+            stderr or "",
+            last_source_mtime,
+        ),
+    )
+    db.conn.commit()
 
 
 def _max_mtime(memory_dir: str | None) -> float | None:
