@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import time
 from datetime import date
@@ -46,6 +47,26 @@ class IngestResult(TypedDict):
     duration_ms: int
     exit_code: int
     stderr: str
+
+
+class RetrievedPage(TypedDict):
+    """One ranked page returned from retrieve()."""
+
+    path: str
+    score: float
+    title: str
+    excerpt: str
+
+
+_OPERATIONAL_PAGES = frozenset({"schema.md", "index.md", "log.md"})
+
+_STOPWORDS = frozenset({
+    "a", "an", "and", "any", "are", "as", "at", "be", "by", "do", "does",
+    "for", "from", "has", "have", "how", "if", "in", "is", "it", "its",
+    "of", "on", "or", "our", "that", "the", "their", "this", "to", "was",
+    "we", "what", "when", "where", "which", "who", "why", "will", "with",
+    "would", "you", "your",
+})
 
 
 _INDEX_TEMPLATE = """\
@@ -429,6 +450,141 @@ def _record_operation(
         ),
     )
     db.conn.commit()
+
+
+def retrieve(question: str, top_k: int = 5) -> list[RetrievedPage]:
+    """Rank wiki entity pages by token overlap with `question`.
+
+    Score per page = sum over question tokens of `(3 if in title, else
+    2 if in any header, else 1 if in body, else 0)`. Ties broken by
+    newer mtime. Operational pages (schema/index/log) are excluded.
+    Returns [] when no tokens remain after stopword stripping or no
+    page scores above 0.
+    """
+    q_tokens = _tokenize(question)
+    if not q_tokens:
+        return []
+
+    home = wiki_home()
+    scored: list[tuple[float, float, RetrievedPage]] = []
+    for path in home.glob("*.md"):
+        if path.name in _OPERATIONAL_PAGES:
+            continue
+        content = path.read_text(encoding="utf-8")
+        score, title, excerpt = _score_page(content, q_tokens, path)
+        if score <= 0:
+            continue
+        mtime = path.stat().st_mtime
+        scored.append((score, mtime, {
+            "path": path.name,
+            "score": score,
+            "title": title,
+            "excerpt": excerpt,
+        }))
+
+    # Sort by score desc, then mtime desc (newer first on ties)
+    scored.sort(key=lambda t: (-t[0], -t[1]))
+    return [entry for _, _, entry in scored[:top_k]]
+
+
+def _tokenize(text: str) -> set[str]:
+    """Lowercase + split on word boundaries + drop stopwords and <2-char tokens."""
+    raw = re.findall(r"\w+", text.lower(), flags=re.UNICODE)
+    return {t for t in raw if len(t) >= 2 and t not in _STOPWORDS}
+
+
+def _score_page(
+    content: str, q_tokens: set[str], path: Path
+) -> tuple[float, str, str]:
+    """Score a page and pick a title + excerpt.
+
+    Returns (score, title, excerpt). Score is:
+        sum over question tokens of max(3 if in title, 2 if in any header,
+        1 if in body).
+    Title: first H1 line, or filename stem if no H1.
+    Excerpt: first 2 non-empty lines under the header that matched the
+        most question tokens; falls back to title + first body line.
+    """
+    lines = content.splitlines()
+
+    title_line = ""
+    header_lines: list[str] = []  # (line_index, line_text) pairs
+    header_positions: list[tuple[int, str]] = []
+    body_tokens: set[str] = set()
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("# ") and not title_line:
+            title_line = stripped[2:].strip()
+        elif stripped.startswith(("## ", "### ", "#### ")):
+            header_positions.append((i, stripped.lstrip("#").strip()))
+            header_lines.append(stripped)
+        else:
+            body_tokens |= _tokenize(line)
+
+    title_tokens = _tokenize(title_line)
+    header_tokens = set()
+    for _, h_text in header_positions:
+        header_tokens |= _tokenize(h_text)
+
+    score = 0.0
+    for tok in q_tokens:
+        if tok in title_tokens:
+            score += 3
+        elif tok in header_tokens:
+            score += 2
+        elif tok in body_tokens:
+            score += 1
+
+    title = title_line or path.stem.replace("-", " ").title()
+    excerpt = _pick_excerpt(lines, header_positions, q_tokens, title_line)
+    return score, title, excerpt
+
+
+def _pick_excerpt(
+    lines: list[str],
+    header_positions: list[tuple[int, str]],
+    q_tokens: set[str],
+    title_line: str,
+) -> str:
+    """Return the first 2 non-empty lines under the best-matching header."""
+    best_idx: int | None = None
+    best_overlap = 0
+    for i, h_text in header_positions:
+        overlap = len(_tokenize(h_text) & q_tokens)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_idx = i
+
+    if best_idx is not None:
+        return _first_n_nonempty(lines[best_idx + 1:], 2)
+
+    # Fallback: title line + first non-empty body line
+    first_body = ""
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue
+        first_body = stripped
+        break
+    pieces = [p for p in (title_line, first_body) if p]
+    return "\n".join(pieces)
+
+
+def _first_n_nonempty(lines: list[str], n: int) -> str:
+    out: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            break  # hit next header
+        out.append(stripped)
+        if len(out) == n:
+            break
+    return "\n".join(out)
 
 
 def _max_mtime(memory_dir: str | None) -> float | None:
