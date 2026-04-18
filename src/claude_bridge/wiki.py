@@ -131,13 +131,23 @@ def _assert_inside_wiki(relative_path: str, *, must_exist: bool) -> Path:
     return resolved
 
 
-def _load_schema_template() -> str:
-    """Load the bundled schema template via importlib.resources."""
+def _load_template(name: str) -> str:
+    """Load a bundled prompt template by filename via importlib.resources."""
     return (
         resources.files("claude_bridge.prompts")
-        .joinpath("wiki_schema_template.md")
+        .joinpath(name)
         .read_text(encoding="utf-8")
     )
+
+
+def _load_schema_template() -> str:
+    """Load the seed schema template (kept as a named helper for M23.T1)."""
+    return _load_template("wiki_schema_template.md")
+
+
+def _load_ingest_template() -> str:
+    """Load the static portion of the ingest prompt (consumed by M24.T2)."""
+    return _load_template("wiki_ingest.md")
 
 
 def collect_sources(
