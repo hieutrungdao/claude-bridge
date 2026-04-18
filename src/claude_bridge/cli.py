@@ -364,6 +364,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("uninstall", help="Remove claude-bridge data and config")
     p.add_argument("--force", action="store_true", help="Skip confirmation prompt")
 
+    # wiki (compounding memory layer)
+    w = sub.add_parser("wiki", help="Compounding wiki memory operations")
+    wsub = w.add_subparsers(dest="wiki_cmd", required=True)
+    wp = wsub.add_parser("ingest", help="Synthesize agent memories into the wiki")
+    wp.add_argument("--agent", metavar="NAME", default=None,
+                    help="narrow to a single agent")
+    wp.add_argument("--dry-run", action="store_true",
+                    help="preview without invoking claude")
+
     # daemon
     d = sub.add_parser("daemon", help="Manage system service (systemd/launchd)")
     dsub = d.add_subparsers(dest="daemon_cmd", required=True)
@@ -1997,6 +2006,83 @@ def _cmd_uninstall(args) -> int:
     return 0
 
 
+def _cmd_wiki(args) -> int:
+    """Dispatch `bridge-cli wiki <subcmd>`."""
+    wiki_cmd = getattr(args, "wiki_cmd", None)
+    if wiki_cmd == "ingest":
+        return _cmd_wiki_ingest(args)
+    print(f"Error: unknown wiki subcommand: {wiki_cmd}", file=sys.stderr)
+    return 1
+
+
+def _filter_bridgewiki_ignored(sources: list) -> tuple[list, list[str]]:
+    """Split sources into (kept, ignored_agent_names) based on .bridgewiki-ignore."""
+    kept: list = []
+    ignored: list[str] = []
+    for rec in sources:
+        marker = os.path.join(
+            os.path.expanduser(rec["project_dir"]), ".bridgewiki-ignore"
+        )
+        if os.path.isfile(marker):
+            ignored.append(rec["agent"])
+        else:
+            kept.append(rec)
+    return kept, ignored
+
+
+def _cmd_wiki_ingest(args) -> int:
+    from . import wiki as wiki_mod
+
+    sources = wiki_mod.collect_sources(agent_filter=args.agent)
+    kept, ignored = _filter_bridgewiki_ignored(sources)
+
+    if ignored:
+        print(f"[ingest] Skipping {len(ignored)} ignored project(s): "
+              f"{', '.join(ignored)}")
+
+    if not kept:
+        print("No sources to ingest.")
+        return 0
+
+    if args.dry_run:
+        print(f"[dry-run] Would ingest {len(kept)} source(s):")
+        for rec in kept:
+            status = "with memory" if rec["found"] else "no memory yet"
+            mtime = rec["source_mtime"] or 0
+            print(f"  - {rec['agent']} ({rec['project_dir']}) — {status}, "
+                  f"mtime={mtime:.0f}")
+        print("[dry-run] No subprocess invoked, no wiki_operations row written.")
+        return 0
+
+    def source_filter(s: list) -> list:
+        filtered, _ = _filter_bridgewiki_ignored(s)
+        return filtered
+
+    result = wiki_mod.ingest(
+        agent_filter=args.agent,
+        source_filter=source_filter,
+    )
+
+    if result["skipped"]:
+        print("[ingest] Skipped — sources unchanged since last successful run")
+        return 0
+
+    if result["exit_code"] != 0:
+        print(f"[ingest] Failed — exit {result['exit_code']}", file=sys.stderr)
+        if result["stderr"]:
+            print(result["stderr"], file=sys.stderr)
+        return result["exit_code"]
+
+    print(
+        f"[ingest] Done — {result['sources_count']} source(s), "
+        f"{len(result['pages_changed'])} page(s) changed, "
+        f"cost=${result['cost_usd']:.4f}, duration={result['duration_ms']}ms"
+    )
+    if result["pages_changed"]:
+        print(f"  pages: {', '.join(result['pages_changed'])}")
+    return 0
+
+
 def _cmd_daemon(args) -> int:
     """Manage Claude Bridge as a system service (systemd/launchd)."""
     from . import get_bridge_home
@@ -2323,6 +2409,7 @@ COMMANDS = {
     "doctor": None,  # handled specially below
     "uninstall": None,  # handled specially below
     "daemon": None,  # handled specially below
+    "wiki": None,  # handled specially below
 }
 
 
@@ -2347,6 +2434,8 @@ def main():
         sys.exit(_cmd_uninstall(args))
     if args.command == "daemon":
         sys.exit(_cmd_daemon(args))
+    if args.command == "wiki":
+        sys.exit(_cmd_wiki(args))
 
     db = BridgeDB()
     try:
