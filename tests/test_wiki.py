@@ -317,3 +317,253 @@ class TestCustomBridgeHome:
         home = wiki_home()
         assert home == custom / "wiki"
         assert (home / "schema.md").is_file()
+
+
+# ---------------------------------------------------------------------------
+# M23.T2 — collect_sources(): fan out across agents, read Auto Memory,
+# compute source_mtime, never write to ~/.claude/projects/.
+# ---------------------------------------------------------------------------
+
+
+def _setup_env(tmp_path, monkeypatch):
+    """Set CLAUDE_BRIDGE_HOME and HOME to tmp_path subdirs."""
+    bridge_home = tmp_path / "bridge"
+    fake_home = tmp_path / "home"
+    bridge_home.mkdir(parents=True, exist_ok=True)
+    fake_home.mkdir(parents=True, exist_ok=True)
+    (fake_home / ".claude" / "projects").mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CLAUDE_BRIDGE_HOME", str(bridge_home))
+    monkeypatch.setenv("HOME", str(fake_home))
+    return bridge_home, fake_home
+
+
+def _register_agent(name, project_dir, model="sonnet"):
+    """Insert an agent into the default BridgeDB."""
+    from claude_bridge.db import BridgeDB
+
+    db = BridgeDB()
+    session_id = f"{name}--{os.path.basename(project_dir)}"
+    db.create_agent(
+        name=name,
+        project_dir=project_dir,
+        session_id=session_id,
+        agent_file=f"/fake/agents/bridge--{session_id}.md",
+        purpose="",
+        model=model,
+    )
+    db.close()
+
+
+def _seed_memory(fake_home, project_dir, files: dict):
+    """Write Auto Memory files for the given project under fake_home."""
+    encoded = os.path.normpath(project_dir).replace("/", "-")
+    mem_dir = fake_home / ".claude" / "projects" / encoded / "memory"
+    mem_dir.mkdir(parents=True, exist_ok=True)
+    for fname, content in files.items():
+        (mem_dir / fname).write_text(content)
+    return mem_dir
+
+
+class TestCollectSourcesEmpty:
+    def test_no_agents_returns_empty_list(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.wiki import collect_sources
+
+        assert collect_sources() == []
+
+    def test_filter_for_nonexistent_agent_returns_empty(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        from claude_bridge.wiki import collect_sources
+
+        assert collect_sources(agent_filter="frontend") == []
+
+
+class TestCollectSourcesHappyPath:
+    def test_returns_records_for_all_agents_with_memory(self, tmp_path, monkeypatch):
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        _register_agent("frontend", "/projects/web")
+        _seed_memory(fake_home, "/projects/api", {
+            "MEMORY.md": "# Backend\n- Use Pydantic\n",
+            "testing.md": "# Testing\nUse pytest\n",
+        })
+        _seed_memory(fake_home, "/projects/web", {
+            "MEMORY.md": "# Frontend\n- Use React\n",
+        })
+        from claude_bridge.wiki import collect_sources
+
+        records = collect_sources()
+        assert len(records) == 2
+        by_name = {r["agent"]: r for r in records}
+        assert set(by_name.keys()) == {"backend", "frontend"}
+        assert by_name["backend"]["found"] is True
+        assert "Pydantic" in by_name["backend"]["main_memory"]
+        assert any("pytest" in t["content"] for t in by_name["backend"]["topics"])
+        assert by_name["frontend"]["main_memory"].startswith("# Frontend")
+        assert by_name["frontend"]["topics"] == []
+
+    def test_record_has_session_id(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        from claude_bridge.wiki import collect_sources
+
+        [record] = collect_sources()
+        assert record["session_id"] == "backend--api"
+
+    def test_filter_narrows_to_one_agent(self, tmp_path, monkeypatch):
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        _register_agent("frontend", "/projects/web")
+        _seed_memory(fake_home, "/projects/api", {"MEMORY.md": "x"})
+        _seed_memory(fake_home, "/projects/web", {"MEMORY.md": "y"})
+        from claude_bridge.wiki import collect_sources
+
+        records = collect_sources(agent_filter="backend")
+        assert len(records) == 1
+        assert records[0]["agent"] == "backend"
+
+
+class TestCollectSourcesMissingMemory:
+    def test_agent_without_memory_returns_not_found_record(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        from claude_bridge.wiki import collect_sources
+
+        [record] = collect_sources()
+        assert record["agent"] == "backend"
+        assert record["found"] is False
+        assert record["main_memory"] == ""
+        assert record["topics"] == []
+        assert record["source_mtime"] is None
+        assert record["memory_dir"] is None
+
+    def test_empty_memory_dir_has_none_mtime(self, tmp_path, monkeypatch):
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        # Create empty memory dir (no .md files)
+        _seed_memory(fake_home, "/projects/api", {})
+        from claude_bridge.wiki import collect_sources
+
+        [record] = collect_sources()
+        assert record["found"] is True
+        assert record["source_mtime"] is None
+
+
+class TestCollectSourcesMtime:
+    def test_mtime_is_max_across_memory_files(self, tmp_path, monkeypatch):
+        import time as _time
+
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        mem_dir = _seed_memory(fake_home, "/projects/api", {
+            "MEMORY.md": "# Main\n",
+            "topic_a.md": "A\n",
+            "topic_b.md": "B\n",
+        })
+
+        # Backdate MEMORY.md and topic_a; leave topic_b as "now"
+        older = _time.time() - 3600
+        os.utime(mem_dir / "MEMORY.md", (older, older))
+        os.utime(mem_dir / "topic_a.md", (older, older))
+        newest = _time.time()
+        os.utime(mem_dir / "topic_b.md", (newest, newest))
+
+        from claude_bridge.wiki import collect_sources
+        [record] = collect_sources()
+
+        assert record["source_mtime"] is not None
+        assert record["source_mtime"] == pytest.approx(newest, abs=1.0)
+
+    def test_mtime_ignores_non_md_files(self, tmp_path, monkeypatch):
+        import time as _time
+
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        mem_dir = _seed_memory(fake_home, "/projects/api", {
+            "MEMORY.md": "# Main\n",
+        })
+        # Add a non-md file with a much newer mtime — must be ignored
+        junk = mem_dir / "notes.txt"
+        junk.write_text("ignore me")
+        future = _time.time() + 10_000
+        os.utime(junk, (future, future))
+
+        from claude_bridge.wiki import collect_sources
+        [record] = collect_sources()
+
+        assert record["source_mtime"] is not None
+        assert record["source_mtime"] < future - 100
+
+
+class TestCollectSourcesNeverWritesToClaudeMemory:
+    def test_no_writes_under_claude_projects(self, tmp_path, monkeypatch):
+        _, fake_home = _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        _seed_memory(fake_home, "/projects/api", {"MEMORY.md": "# Main\n"})
+
+        opened_for_write: list[str] = []
+        real_open = builtins.open
+
+        def tracking_open(file, mode="r", *args, **kwargs):
+            if isinstance(file, (str, os.PathLike)) and any(
+                m in mode for m in ("w", "a", "x", "+")
+            ):
+                opened_for_write.append(os.fspath(file))
+            return real_open(file, mode, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "open", tracking_open)
+
+        from claude_bridge.wiki import collect_sources
+        collect_sources()
+
+        forbidden_prefix = str(fake_home / ".claude" / "projects")
+        violations = [p for p in opened_for_write if p.startswith(forbidden_prefix)]
+        assert not violations, f"collect_sources wrote to forbidden path(s): {violations}"
+
+
+class TestCollectSourcesDependencyInjection:
+    def test_injected_db_is_used_and_not_closed(self, tmp_path, monkeypatch):
+        """collect_sources(db=injected) uses the caller's db and must not close it."""
+        _setup_env(tmp_path, monkeypatch)
+        from claude_bridge.db import BridgeDB
+        from claude_bridge.wiki import collect_sources
+
+        db = BridgeDB()
+        try:
+            # Inject; expect [] because no agents
+            assert collect_sources(db=db) == []
+            # The caller's db must still be usable afterwards
+            assert db.list_agents() == []
+        finally:
+            db.close()
+
+    def test_default_db_is_created_when_none(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        _register_agent("backend", "/projects/api")
+        from claude_bridge.wiki import collect_sources
+
+        # No db injected — collector creates its own
+        records = collect_sources()
+        assert len(records) == 1
+        assert records[0]["agent"] == "backend"
+
+
+class TestCollectSourcesOrdering:
+    def test_records_preserve_list_agents_order(self, tmp_path, monkeypatch):
+        _setup_env(tmp_path, monkeypatch)
+        _register_agent("alpha", "/projects/a")
+        _register_agent("beta", "/projects/b")
+        _register_agent("gamma", "/projects/c")
+
+        from claude_bridge.db import BridgeDB
+        from claude_bridge.wiki import collect_sources
+
+        db = BridgeDB()
+        try:
+            expected = [row["name"] for row in db.list_agents()]
+        finally:
+            db.close()
+
+        records = collect_sources()
+        assert [r["agent"] for r in records] == expected
