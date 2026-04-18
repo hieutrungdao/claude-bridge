@@ -39,3 +39,6 @@ claude_bridge = ["channel_server/**/*", "prompts/*.md"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: opt-in test that invokes the real `claude` CLI (run with `pytest -m integration`)",
+]
