@@ -650,7 +650,8 @@ def query(
 
         answer, cost_usd, reported_ms = _parse_claude_query_json(completed.stdout)
         duration_ms = reported_ms or wall_ms
-        sources_cited = _extract_citations(answer)
+        retrieved_paths = [p["path"] for p in pages]
+        sources_cited = _extract_citations(answer, allowed_pages=retrieved_paths)
 
         _record_operation(
             db,
@@ -715,12 +716,23 @@ def _parse_claude_query_json(stdout: str) -> tuple[str, float, int]:
     return answer, cost, duration
 
 
-def _extract_citations(answer: str) -> list[str]:
-    """Return unique [Source: foo.md] filenames, preserving first-occurrence order."""
+def _extract_citations(
+    answer: str, allowed_pages: list[str] | None = None
+) -> list[str]:
+    """Return unique [Source: foo.md] filenames, preserving first-occurrence order.
+
+    When `allowed_pages` is provided, filenames not in the set are dropped —
+    this guards against false positives when Claude's answer echoes a
+    literal `[Source: page.md]` example from inside a code fence rather
+    than citing a real retrieved page.
+    """
+    allowed = set(allowed_pages) if allowed_pages is not None else None
     seen: set[str] = set()
     ordered: list[str] = []
     for match in _CITATION_RE.findall(answer):
         name = match.strip()
+        if allowed is not None and name not in allowed:
+            continue
         if name not in seen:
             seen.add(name)
             ordered.append(name)

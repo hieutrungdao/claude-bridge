@@ -201,6 +201,30 @@ class TestCitationExtraction:
         result = query("auth sessions")
         assert result["sources_cited"] == ["sessions.md", "auth.md"]
 
+    def test_citation_to_unretrieved_page_filtered_out(self, tmp_path, monkeypatch):
+        """Guards against false positives when the answer echoes a
+        literal [Source: foo.md] example from inside a code fence that
+        doesn't correspond to a retrieved page."""
+        _setup_sandbox(tmp_path, monkeypatch)
+        from claude_bridge.wiki import query, wiki_home
+        home = wiki_home()
+        _seed_page(home, "api.md", "# API\n\n## R\n\nstuff.\n")
+
+        def fake_run(cmd, **kwargs):
+            # Claude's answer cites api.md (real) and also page.md (not retrieved)
+            return subprocess.CompletedProcess(
+                cmd, 0,
+                stdout='{"total_cost_usd": 0.01, "duration_ms": 100, '
+                       '"result": "real claim [Source: api.md]. '
+                       'The wiki uses [Source: page.md] format."}',
+                stderr="",
+            )
+        monkeypatch.setattr(subprocess, "run", fake_run)
+
+        result = query("stuff")
+        assert result["sources_cited"] == ["api.md"], \
+            f"expected only api.md, got {result['sources_cited']}"
+
     def test_no_citations_yields_empty_list(self, tmp_path, monkeypatch):
         _setup_sandbox(tmp_path, monkeypatch)
         from claude_bridge.wiki import query, wiki_home
